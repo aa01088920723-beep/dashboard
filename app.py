@@ -1,7 +1,6 @@
 import pandas as pd
 import streamlit as st
 import urllib.parse
-import plotly.express as px
 
 # 1. 페이지 기본 설정
 st.set_page_config(
@@ -13,12 +12,10 @@ st.set_page_config(
 # 2. TV 최적화 스타일 (스크롤 최소화 & 대형 폰트)
 st.markdown("""
     <style>
-    /* 전체 여백 줄이기 */
     .block-container {
         padding-top: 1.5rem !important;
         padding-bottom: 0rem !important;
     }
-    /* 폰트 및 카드 크기 확대 */
     div[data-testid="stMetricValue"] {
         font-size: 2.5rem !important;
         font-weight: 800 !important;
@@ -68,21 +65,17 @@ with tab1:
 
         st.divider()
 
-        # 좌우 split: 좌측 차트 / 우측 최근 10건 표 (한 화면에 수용)
+        # 좌우 split: 좌측 차트 / 우측 최근 10건 표
         col_left, col_right = st.columns([1, 1])
 
         with col_left:
             st.markdown("##### 📊 주요 공정별 생산량")
             if '공정명단축키)' in df_prod.columns:
-                group_df = df_prod.groupby('공정명단축키)')['생산수량'].sum().reset_index()
-                fig = px.bar(group_df, x='공정명단축키)', y='생산수량', text_auto=True,
-                             color='공정명단축키)', color_discrete_sequence=px.colors.qualitative.Pastel)
-                fig.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
-                st.plotly_chart(fig, use_container_width=True)
+                group_df = df_prod.groupby('공정명단축키)')['생산수량'].sum()
+                st.bar_chart(group_df, height=350)
 
         with col_right:
             st.markdown("##### ⏱️ 최근 생산일지 기록 (최신 10건)")
-            # 최신 10개 행만 추출하여 스크롤 방지
             recent_df = df_prod.tail(10).iloc[::-1]
             st.dataframe(recent_df, use_container_width=True, height=350)
 
