@@ -1,63 +1,112 @@
 import pandas as pd
 import streamlit as st
 import urllib.parse
+import plotly.express as px
 
-# 페이지 기본 설정
-st.set_page_config(page_title="주간 업무보고 대시보드", layout="wide")
+# 1. 페이지 기본 설정
+st.set_page_config(
+    page_title="주간 업무보고 대시보드 (TV전용)",
+    page_icon="📊",
+    layout="wide"
+)
 
-st.title("📊 주간 업무보고 통합 대시보드")
-st.caption("버튼(탭)을 클릭하여 각 항목의 현황을 실시간으로 확인하세요.")
+# 2. TV 최적화 스타일 (스크롤 최소화 & 대형 폰트)
+st.markdown("""
+    <style>
+    /* 전체 여백 줄이기 */
+    .block-container {
+        padding-top: 1.5rem !important;
+        padding-bottom: 0rem !important;
+    }
+    /* 폰트 및 카드 크기 확대 */
+    div[data-testid="stMetricValue"] {
+        font-size: 2.5rem !important;
+        font-weight: 800 !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 1.2rem !important;
+        font-weight: 700 !important;
+    }
+    button[data-baseweb="tab"] {
+        font-size: 20px !important;
+        font-weight: bold !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# 구글 스프레드시트 ID
 DOCUMENT_ID = "1cJEuRJ8Sbgb-PF0-xta0j7J2MqoYlATWXRk907DZPnc"
 
-# 구글 시트 데이터를 안전하게 불러오는 함수 (UTF-8 인코딩 적용)
 @st.cache_data(ttl=5)
 def load_sheet_data(sheet_name):
     encoded_name = urllib.parse.quote(sheet_name)
     url = f"https://docs.google.com/spreadsheets/d/{DOCUMENT_ID}/gviz/tq?tqx=out:csv&sheet={encoded_name}"
     return pd.read_csv(url, encoding='utf-8')
 
-# 상단 탭(버튼) 구성
+st.title("🖥️ 주간 업무보고 핵심 요약 대시보드")
+
+# 탭 구성
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📈 차주 생산목표 & 완제품 재고", 
-    "📋 생산일지", 
-    "📦 부품/재고 마스터시트", 
-    "⚙️ BOM 현황"
+    "📋 생산일지 요약", 
+    "📦 주요 재고 현황", 
+    "⚙️ BOM 현황",
+    "📈 완제품 재고 현황"
 ])
 
-# 1. 차주 생산목표 및 완제품 재고 현황 (외부 사이트 임베드/링크)
+# 1. 생산일지 요약 (차트 + 최근 10건)
 with tab1:
-    st.subheader("차주 생산목표 및 완제품 재고 현황")
-    st.info("💡 아래 '페이지 열기' 버튼을 누르시면 해당 페이지로 바로 이동합니다.")
-    st.link_button("🔗 완제품 재고 현황 페이지 열기", "https://m.site.naver.com/2a4rF", use_container_width=True)
-    
-    # 웹페이지 화면을 대시보드 안에 직접 띄우기 (iframe 방식)
-    st.components.v1.iframe("https://m.site.naver.com/2a4rF", height=600, scrolling=True)
-
-# 2. 생산일지
-with tab2:
-    st.subheader("생산일지 현황 (구글 설문지 실시간 연동)")
     try:
         df_prod = load_sheet_data("생산일지")
-        st.dataframe(df_prod, use_container_width=True)
-    except Exception as e:
-        st.error(f"생산일지 데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        df_prod['생산수량'] = pd.to_numeric(df_prod['생산수량'], errors='coerce').fillna(0)
+        df_prod['불량수량'] = pd.to_numeric(df_prod['불량수량'], errors='coerce').fillna(0)
 
-# 3. 부품 및 재고 마스터시트
-with tab3:
-    st.subheader("부품 및 재고 마스터시트")
+        # 상단 요약 KPI
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("총 생산량", f"{int(df_prod['생산수량'].sum()):,} EA")
+        c2.metric("총 불량수량", f"{int(df_prod['불량수량'].sum()):,} EA")
+        c3.metric("최근 작업일", str(df_prod['제조일자'].iloc[-1]) if '제조일자' in df_prod.columns else "-")
+        c4.metric("누적 등록건수", f"{len(df_prod)} 건")
+
+        st.divider()
+
+        # 좌우 split: 좌측 차트 / 우측 최근 10건 표 (한 화면에 수용)
+        col_left, col_right = st.columns([1, 1])
+
+        with col_left:
+            st.markdown("##### 📊 주요 공정별 생산량")
+            if '공정명단축키)' in df_prod.columns:
+                group_df = df_prod.groupby('공정명단축키)')['생산수량'].sum().reset_index()
+                fig = px.bar(group_df, x='공정명단축키)', y='생산수량', text_auto=True,
+                             color='공정명단축키)', color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig.update_layout(height=350, showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col_right:
+            st.markdown("##### ⏱️ 최근 생산일지 기록 (최신 10건)")
+            # 최신 10개 행만 추출하여 스크롤 방지
+            recent_df = df_prod.tail(10).iloc[::-1]
+            st.dataframe(recent_df, use_container_width=True, height=350)
+
+    except Exception as e:
+        st.error(f"생산일지 불러오기 실패: {e}")
+
+# 2. 재고 마스터시트 요약
+with tab2:
     try:
         df_master = load_sheet_data("마스터시트")
-        st.dataframe(df_master, use_container_width=True)
+        st.markdown("##### 📦 부품 및 재고 마스터 현황")
+        st.dataframe(df_master, use_container_width=True, height=500)
     except Exception as e:
-        st.error(f"마스터시트 데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        st.error(f"마스터시트 불러오기 실패: {e}")
 
-# 4. BOM 현황
-with tab4:
-    st.subheader("BOM 현황")
+# 3. BOM 현황
+with tab3:
     try:
         df_bom = load_sheet_data("BOM")
-        st.dataframe(df_bom, use_container_width=True)
+        st.markdown("##### ⚙️ BOM 현황")
+        st.dataframe(df_bom, use_container_width=True, height=500)
     except Exception as e:
-        st.error(f"BOM 데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        st.error(f"BOM 불러오기 실패: {e}")
+
+# 4. 외부 링크
+with tab4:
+    st.components.v1.iframe("https://m.site.naver.com/2a4rF", height=600, scrolling=True)
