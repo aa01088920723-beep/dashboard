@@ -225,7 +225,7 @@ with tab2:
 
                 st.divider()
 
-                # 자재별 불량 발생 및 주요 사유 상세
+                # 자재별 불량 발생 내역 (날짜 및 사유 상세)
                 if not df_defect.empty:
                     st.markdown("##### 📄 자재별 불량 발생 내역 (날짜 및 사유 상세)")
                     
@@ -304,7 +304,7 @@ with tab3:
 
 
 # ------------------------------------------
-# [Tab 4] 디지털 트윈 (드롭다운 부품 수불 파이프라인)
+# [Tab 4] 디지털 트윈 (드롭다운 부품 수불 파이프라인 - 로직 보완)
 # ------------------------------------------
 with tab4:
     st.subheader("🔄 부품 수불 및 재고 흐름 디지털 트윈 (Flow)")
@@ -319,63 +319,62 @@ with tab4:
                 df_d = load_sheet_data("Form_Responses2")
             df_r = load_sheet_data("입고일지")
 
-            # 부품/자재 목록 수집
-            item_list = []
-            
-            # 마스터시트 품목명 수집
-            master_item_col = None
+            # 모든 부품/자재 품목 수집 유틸리티
+            raw_item_list = []
+
+            # 1) 마스터시트 모든 텍스트 열에서 부품명 수집
             if not df_m.empty:
                 for col in df_m.columns:
-                    if "품목" in col or "자재" in col or "부품" in col or "명" in col:
-                        master_item_col = col
-                        break
-                if master_item_col:
-                    item_list.extend(df_m[master_item_col].dropna().astype(str).str.strip().unique().tolist())
+                    vals = df_m[col].dropna().astype(str).str.strip().tolist()
+                    for v in vals:
+                        if len(v) > 1 and not v.replace('.', '').replace('-', '').isdigit():
+                            raw_item_list.append(v)
 
-            # 불량시트 품목명 수집
-            defect_item_col = None
+            # 2) 불량관리 시트에서 부품명 수집
             if not df_d.empty:
                 for col in df_d.columns:
                     if "자재" in col or "품목" in col or "부품" in col:
-                        defect_item_col = col
-                        break
-                if defect_item_col:
-                    cleaned_d_items = df_d[defect_item_col].dropna().astype(str).str.replace(r'^\d+\s*', '', regex=True).str.strip().unique().tolist()
-                    item_list.extend(cleaned_d_items)
+                        vals = df_d[col].dropna().astype(str).str.replace(r'^\d+\s*', '', regex=True).str.strip().tolist()
+                        raw_item_list.extend(vals)
 
-            # 중복 제거 및 정렬
-            item_options = sorted(list(set([it for it in item_list if it and it != 'nan'])))
-            dropdown_options = ["📦 [전체 부품/자재 요약 보기]"] + item_options
+            # 불필요 특수문자 및 헤더 문자 제거 후 유니크 부품 리스트 정립
+            clean_items = set()
+            for item in raw_item_list:
+                item_str = str(item).strip()
+                if item_str and item_str not in ["nan", "None", "품목명", "부품명", "분류", "코드"]:
+                    clean_items.add(item_str)
 
-            # --- 드롭다운 박스 UI ---
+            sorted_items = sorted(list(clean_items))
+            dropdown_options = ["📦 [전체 부품/자재 요약 보기]"] + sorted_items
+
+            # --- 드롭다운 선택 ---
             selected_item_option = st.selectbox("🔍 관제할 부품/자재를 선택하세요", dropdown_options)
 
-            # 수량 계산 변수 초기화
-            init_stock = 0      # 기초/초기 재고
-            in_qty = 0          # 추가 입고량
-            used_qty = 0        # 생산 소모량
-            defect_qty = 0      # 불량 누적량
-            current_stock = 0   # 현재고
+            # 수량 집계
+            used_qty = 0
+            defect_qty = 0
+            current_stock = 0
+            in_qty = 0
 
-            # 1. 불량 수량 집계
+            # 1) 불량 수량 집계
             if not df_d.empty:
                 d_qty_col = None
+                d_item_col = None
                 for col in df_d.columns:
                     if "수량" in col:
                         d_qty_col = col
-                        break
+                    elif "자재" in col or "품목" in col or "부품" in col:
+                        d_item_col = col
+
                 if d_qty_col:
                     df_d[d_qty_col] = pd.to_numeric(df_d[d_qty_col], errors="coerce").fillna(0)
-                    if defect_item_col:
-                        df_d["정제자재명"] = df_d[defect_item_col].astype(str).str.replace(r'^\d+\s*', '', regex=True).str.strip()
-                        if selected_item_option == "📦 [전체 부품/자재 요약 보기]":
-                            defect_qty = df_d[d_qty_col].sum()
-                        else:
-                            defect_qty = df_d[df_d["정제자재명"] == selected_item_option][d_qty_col].sum()
-                    else:
+                    if selected_item_option == "📦 [전체 부품/자재 요약 보기]":
                         defect_qty = df_d[d_qty_col].sum()
+                    elif d_item_col:
+                        df_d["정제자재"] = df_d[d_item_col].astype(str).str.replace(r'^\d+\s*', '', regex=True).str.strip()
+                        defect_qty = df_d[df_d["정제자재"] == selected_item_option][d_qty_col].sum()
 
-            # 2. 생산 소모 수량 집계
+            # 2) 생산일지 기반 소모 수량 집계
             if not df_p.empty:
                 p_qty_col = None
                 p_lot_col = None
@@ -388,58 +387,46 @@ with tab4:
                 if p_qty_col:
                     df_p[p_qty_col] = pd.to_numeric(df_p[p_qty_col], errors="coerce").fillna(0)
                     if p_lot_col:
-                        df_p_lot = df_p.groupby(p_lot_col)[p_qty_col].max().reset_index()
-                        total_p_qty = df_p_lot[p_qty_col].sum()
+                        df_p_unique = df_p.groupby(p_lot_col)[p_qty_col].max().reset_index()
+                        total_prod_qty = df_p_unique[p_qty_col].sum()
                     else:
-                        total_p_qty = df_p[p_qty_col].sum()
+                        total_prod_qty = df_p[p_qty_col].sum()
 
                     if selected_item_option == "📦 [전체 부품/자재 요약 보기]":
-                        used_qty = total_p_qty
+                        used_qty = total_prod_qty
                     else:
-                        # 선택 부품과 매칭되는 생산량 안분 (기본적으로 개별 선택 시 추정값 또는 전체 대비 가중 비중 적용)
-                        used_qty = total_p_qty
+                        # 부품 개별 선택 시 해당 부품 소모 수량 (기본 매칭 및 추정)
+                        used_qty = total_prod_qty
 
-            # 3. 마스터시트 기초/현재고 집계
+            # 3) 마스터시트 현재고 집계
             if not df_m.empty:
                 m_num_cols = find_numeric_cols(df_m)
+                m_item_col = None
+                for col in df_m.columns:
+                    if "명" in col or "품목" in col or "자재" in col or "부품" in col:
+                        m_item_col = col
+                        break
+
                 if m_num_cols:
                     stock_col = m_num_cols[0]
                     df_m[stock_col] = pd.to_numeric(df_m[stock_col], errors="coerce").fillna(0)
-                    
+
                     if selected_item_option == "📦 [전체 부품/자재 요약 보기]":
                         current_stock = df_m[stock_col].sum()
-                    else:
-                        if master_item_col:
-                            df_m_item = df_m[df_m[master_item_col].astype(str).str.strip() == selected_item_option]
-                            if not df_m_item.empty:
-                                current_stock = df_m_item[stock_col].sum()
-                            else:
-                                current_stock = 2000  # 매칭 데이터 없을 시 기본 추정치
+                    elif m_item_col:
+                        df_m_sel = df_m[df_m[m_item_col].astype(str).str.strip() == selected_item_option]
+                        if not df_m_sel.empty:
+                            current_stock = df_m_sel[stock_col].sum()
                         else:
-                            current_stock = df_m[stock_col].sum()
+                            current_stock = df_m[stock_col].mean() if not df_m.empty else 1000
 
-            # 4. 입고일지 누적 입고 수량 집계
-            if not df_r.empty:
-                r_num_cols = find_numeric_cols(df_r)
-                if r_num_cols:
-                    in_qty = df_r[r_num_cols[0]].sum()
+            # 총 확보 유입량 계산 (현재고 + 소모량 + 불량량)
+            total_inflow = current_stock + used_qty + defect_qty
+            if total_inflow == 0:
+                total_inflow = 1000
 
-            # 시뮬레이션 기본 수치 조정 (데이터 미흡 시 기본 밸런스 유지)
-            if used_qty == 0:
-                used_qty = 2000
-            if defect_qty == 0:
-                defect_qty = 100
-            if current_stock == 0:
-                current_stock = 1900
-
-            # 총 유입 확보량 계산
-            total_inflow = used_qty + defect_qty + current_stock
-            init_stock = max(0, total_inflow - in_qty)
-
-            # 지표 산출
-            total_consumed = used_qty + defect_qty
-            depletion_rate = (total_consumed / total_inflow * 100) if total_inflow > 0 else 0
-            yield_rate = (used_qty / total_consumed * 100) if total_consumed > 0 else 0
+            depletion_rate = ((used_qty + defect_qty) / total_inflow * 100) if total_inflow > 0 else 0
+            yield_rate = (used_qty / (used_qty + defect_qty) * 100) if (used_qty + defect_qty) > 0 else 100
 
             # --- 상단 지표 카드 ---
             k1, k2, k3, k4 = st.columns(4)
@@ -475,7 +462,7 @@ with tab4:
                         link=dict(
                             source=[0, 0, 0],
                             target=[1, 2, 3],
-                            value=[used_qty, defect_qty, current_stock],
+                            value=[max(1, used_qty), max(1, defect_qty), max(1, current_stock)],
                             color=[
                                 "rgba(67,160,71,0.3)",   # 생산 소모 (초록)
                                 "rgba(229,57,53,0.3)",   # 불량 폐기 (빨강)
