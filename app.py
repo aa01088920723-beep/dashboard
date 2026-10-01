@@ -178,16 +178,16 @@ with tab2:
                 with c1:
                     st.markdown("##### 📊 품목(제품)별 실제 생산 수량")
                     if lot_col_p and qty_col_p:
-                        # [핵심 수정] LOT 번호에서 품목명 원형을 손상 없이 완벽히 추출하는 정제 함수
+                        # [핵심 수정] LOT 번호 뒤에 붙은 날짜(YYMMDD 6자리)만 정확히 잘라내어 pure 품목명만 추출
                         def extract_item_code(lot_str):
                             lot_str = str(lot_str).strip()
-                            # 1. 언더바(_)나 공백( ) 기준으로 구분
+                            # 1. 언더바, 공백, 하이픈 구분자로 된 경우 1차 분리
                             parts = re.split(r'[_ ]', lot_str)
                             item_part = parts[0]
                             
-                            # 2. 하이픈 뒤에 6자리 이상의 날짜/시리얼(예: -261001)만 깔끔하게 제거하고, 
-                            # FIX5550S-18 형태의 규격 하이픈은 온전히 유지
-                            item_part = re.sub(r'-\d{6,}$', '', item_part)
+                            # 2. 맨 뒤에 붙은 YYMMDD 형태의 6자리 숫자 제거 (예: MP02L260402 -> MP02L, FIX5550S260402 -> FIX5550S)
+                            item_part = re.sub(r'[-_]?\d{6}$', '', item_part)
+                            
                             return item_part if item_part else lot_str
 
                         df_unique_lot["품목코드"] = df_unique_lot[lot_col_p].apply(extract_item_code)
@@ -228,7 +228,7 @@ with tab2:
                         fig_bar.update_xaxes(title="생산수량 (EA)")
                         fig_bar.update_layout(
                             height=dynamic_height,
-                            margin=dict(l=150, r=20, t=10, b=40),  # 품목명이 길어저도 안잘리게 좌측 여백(l=150) 대폭 확장
+                            margin=dict(l=150, r=20, t=10, b=40),  # 좌측 여백 충분히 확보
                             coloraxis_showscale=False
                         )
                         
