@@ -178,22 +178,18 @@ with tab2:
                 with c1:
                     st.markdown("##### 📊 품목(제품)별 실제 생산 수량")
                     if lot_col_p and qty_col_p:
-                        # [핵심 수정] LOT 번호 뒤에 붙은 날짜(YYMMDD 6자리)만 정확히 잘라내어 pure 품목명만 추출
+                        # [LOT 번호 뒤 YYMMDD 6자리 제거]
                         def extract_item_code(lot_str):
                             lot_str = str(lot_str).strip()
-                            # 1. 언더바, 공백, 하이픈 구분자로 된 경우 1차 분리
                             parts = re.split(r'[_ ]', lot_str)
                             item_part = parts[0]
-                            
-                            # 2. 맨 뒤에 붙은 YYMMDD 형태의 6자리 숫자 제거 (예: MP02L260402 -> MP02L, FIX5550S260402 -> FIX5550S)
                             item_part = re.sub(r'[-_]?\d{6}$', '', item_part)
-                            
                             return item_part if item_part else lot_str
 
                         df_unique_lot["품목코드"] = df_unique_lot[lot_col_p].apply(extract_item_code)
                         grouped_p = df_unique_lot.groupby("품목코드")[qty_col_p].sum().reset_index().sort_values(by=qty_col_p, ascending=False)
 
-                        # --- 보기 범위 선택 필터 (드롭다운) ---
+                        # 보기 범위 선택 필터
                         f_col1, f_col2 = st.columns([2, 1])
                         with f_col2:
                             view_option = st.selectbox(
@@ -209,10 +205,8 @@ with tab2:
                         else:
                             display_df = grouped_p.sort_values(by=qty_col_p, ascending=True)
 
-                        # 품목 개수에 맞춘 동적 높이 계산 (최소 380px)
                         dynamic_height = max(380, len(display_df) * 35 + 60)
 
-                        # 가로 막대 차트 (orientation='h')
                         fig_bar = px.bar(
                             display_df,
                             x=qty_col_p,
@@ -228,7 +222,7 @@ with tab2:
                         fig_bar.update_xaxes(title="생산수량 (EA)")
                         fig_bar.update_layout(
                             height=dynamic_height,
-                            margin=dict(l=150, r=20, t=10, b=40),  # 좌측 여백 충분히 확보
+                            margin=dict(l=150, r=20, t=10, b=40),
                             coloraxis_showscale=False
                         )
                         
@@ -257,7 +251,7 @@ with tab2:
 
                 st.divider()
 
-                # 자재별 불량 발생 내역 (날짜 및 사유 상세)
+                # 자재별 불량 발생 내역
                 if not df_defect.empty:
                     st.markdown("##### 📄 자재별 불량 발생 내역 (날짜 및 사유 상세)")
                     
@@ -489,15 +483,74 @@ with tab4:
 
 
 # ------------------------------------------
-# [Tab 5] 안전재고 시뮬레이터
+# [Tab 5] 실제 데이터 연동 안전재고 시뮬레이터 (개선)
 # ------------------------------------------
 with tab5:
-    st.subheader("🛡️ 최적 안전재고(Safety Stock) & 재발주점(ROP) 시뮬레이터")
+    st.subheader("🛡️ 품목별 최적 안전재고(Safety Stock) & 재발주점(ROP) 시뮬레이터")
+    st.caption("실제 생산일지 및 마스터시트 데이터를 기반으로 품목별 맞춤 안전재고와 재발주점을 실시간 산출합니다.")
+
+    # 마스터시트 및 생산일지 데이터 자동 로드 및 파싱
+    try:
+        df_m_sim = load_sheet_data("마스터시트")
+        df_p_sim = load_sheet_data("생산일지")
+
+        # 품목 목록 자동 수집
+        itemList = []
+        if not df_m_sim.empty and len(df_m_sim.columns) >= 2:
+            raw_items = df_m_sim.iloc[:, 1].dropna().astype(str).str.strip().tolist()
+            for item in raw_items:
+                if item and not item.isdigit() and item not in ["nan", "None", "이름", "순번"]:
+                    itemList.append(item)
+
+        itemList = sorted(list(set(itemList)))
+        
+        # 선택 상자 구성
+        select_options = ["✏️ [사용자 수동 시뮬레이션 입력]"] + [f"📦 {item}" for item in itemList]
+
+        sel_box_col1, sel_box_col2 = st.columns([2, 1])
+        with sel_box_col1:
+            chosen_item = st.selectbox("🔍 분석 및 시뮬레이션할 품목/자재를 선택하세요", select_options)
+        
+        # 실데이터 기반 소모량 자동 계산 초기값
+        default_demand = 250
+        default_std = 50
+
+        if chosen_item != "✏️️ [사용자 수동 시뮬레이션 입력]":
+            pure_item_name = chosen_item.replace("📦 ", "").strip()
+            
+            # 생산일지에서 해당 품목 수량 데이터 추려내기
+            if not df_p_sim.empty:
+                lot_col = None
+                qty_col = None
+                for c in df_p_sim.columns:
+                    if "LOT" in c or "롯트" in c: lot_col = c
+                    elif "생산수량" in c or "수량" in c: qty_col = c
+                
+                if lot_col and qty_col:
+                    df_p_sim[qty_col] = pd.to_numeric(df_p_sim[qty_col], errors="coerce").fillna(0)
+                    filtered_df = df_p_sim[df_p_sim[lot_col].astype(str).str.contains(pure_item_name, case=False, na=False)]
+                    
+                    if not filtered_df.empty:
+                        quantities = filtered_df[qty_col].values
+                        calc_mean = int(np.mean(quantities))
+                        calc_std = int(np.std(quantities))
+                        
+                        if calc_mean > 0: default_demand = calc_mean
+                        default_std = calc_std if calc_std > 0 else max(10, int(default_demand * 0.2))
+
+            st.success(f"✅ **[{pure_item_name}]** 실적 데이터 연동 완료! (일평균 출고량: `{default_demand:,} EA`, 변동성: `{default_std:,} EA`)")
+
+    except Exception:
+        chosen_item = "✏️ [사용자 수동 시뮬레이션 입력]"
+        default_demand = 250
+        default_std = 50
+
+    st.divider()
 
     s_col1, s_col2 = st.columns([1, 1])
 
     with s_col1:
-        st.markdown("##### 🎛️ 변수 설정")
+        st.markdown("##### 🎛️ 변수 설정 (자동 연동 및 미세 조정)")
         service_level = st.select_slider(
             "목표 서비스 수준 (품절 방지율 %)",
             options=[80, 85, 90, 95, 98, 99, 99.9],
@@ -506,36 +559,39 @@ with tab5:
         z_dict = {80: 0.84, 85: 1.04, 90: 1.28, 95: 1.65, 98: 2.05, 99: 2.33, 99.9: 3.09}
         z_score = z_dict[service_level]
 
-        avg_demand = st.slider("일평균 출고량 (D)", 10, 2000, 250, 10)
-        std_demand = st.slider("일 출고량 변동성 (σd)", 0, 500, 50, 5)
-        lead_time = st.number_input("입고 리드타임 (L - 일)", 1, 60, 7)
-        std_lt = st.number_input("리드타임 지연 변동성 (σL)", 0.0, 10.0, 1.0, 0.5)
+        avg_demand = st.number_input("일평균 출고량 (D - EA)", min_value=1, max_value=50000, value=int(default_demand), step=10)
+        std_demand = st.number_input("일 출고량 변동성 (σd - 표준편차)", min_value=0, max_value=10000, value=int(default_std), step=5)
+        lead_time = st.number_input("입고 리드타임 (L - 일)", min_value=1, max_value=180, value=7)
+        std_lt = st.number_input("리드타임 지연 변동성 (σL - 일)", min_value=0.0, max_value=30.0, value=1.0, step=0.5)
 
     with s_col2:
+        # 안전재고 표준 공식: Safety Stock = Z * sqrt( (L * σd^2) + (D^2 * σL^2) )
         safety_stock = round(
             z_score * math.sqrt((lead_time * (std_demand**2)) + ((avg_demand**2) * (std_lt**2)))
         )
         lt_demand = avg_demand * lead_time
         rop = lt_demand + safety_stock
 
-        st.markdown("##### 📈 산출 결과")
+        target_title = chosen_item.replace("📦 ", "") if chosen_item != "✏️ [사용자 수동 시뮬레이션 입력]" else "선택 품목"
+
+        st.markdown(f"##### 📈 [{target_title}] 산출 결과")
         r1, r2 = st.columns(2)
         with r1:
-            st.metric("🛡️ 권장 안전재고", f"{safety_stock:,} EA", delta=f"Z-Score {z_score}")
+            st.metric("🛡️ 권장 안전재고", f"{safety_stock:,} EA", delta=f"Z-Score {z_score} (서비스율 {service_level}%)")
         with r2:
-            st.metric("🔔 목표 재발주점 (ROP)", f"{rop:,} EA", delta="이 수치 도달 시 발주")
+            st.metric("🔔 목표 재발주점 (ROP)", f"{rop:,} EA", delta=f"실재고가 {rop:,} EA 이하 시 발주 필요")
 
         fig_rop = go.Figure(
             data=[
-                go.Bar(name="리드타임 소요량", x=["ROP"], y=[lt_demand], marker_color="#1e88e5"),
+                go.Bar(name="리드타임 소요량", x=["재발주점(ROP)"], y=[lt_demand], marker_color="#1e88e5", text=[f"{lt_demand:,} EA"], textposition="inside"),
                 go.Bar(
-                    name="안전재고(방어용)", x=["ROP"], y=[safety_stock], marker_color="#e53935"
+                    name="안전재고(방어용)", x=["재발주점(ROP)"], y=[safety_stock], marker_color="#e53935", text=[f"{safety_stock:,} EA"], textposition="inside"
                 ),
             ]
         )
         fig_rop.update_layout(
             barmode="stack",
-            height=220,
+            height=260,
             margin=dict(l=20, r=20, t=20, b=20),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
