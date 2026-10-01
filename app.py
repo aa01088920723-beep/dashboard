@@ -189,20 +189,44 @@ with tab2:
                         df_unique_lot["품목코드"] = df_unique_lot[lot_col_p].apply(extract_item_code)
                         grouped_p = df_unique_lot.groupby("품목코드")[qty_col_p].sum().reset_index().sort_values(by=qty_col_p, ascending=False)
 
+                        # --- 보기 범위 선택 필터 (드롭다운) ---
+                        f_col1, f_col2 = st.columns([2, 1])
+                        with f_col2:
+                            view_option = st.selectbox(
+                                "표시 범위 선택",
+                                ["상위 10개", "상위 20개", "전체 품목 보기"],
+                                key="prod_view_opt"
+                            )
+
+                        if view_option == "상위 10개":
+                            display_df = grouped_p.head(10).sort_values(by=qty_col_p, ascending=True)
+                        elif view_option == "상위 20개":
+                            display_df = grouped_p.head(20).sort_values(by=qty_col_p, ascending=True)
+                        else:
+                            display_df = grouped_p.sort_values(by=qty_col_p, ascending=True)
+
+                        # 품목 수에 맞춘 동적 높이 계산 (최소 380px)
+                        dynamic_height = max(380, len(display_df) * 32 + 60)
+
+                        # 가로 막대 차트 (orientation='h')
                         fig_bar = px.bar(
-                            grouped_p,
-                            x="품목코드",
-                            y=qty_col_p,
+                            display_df,
+                            x=qty_col_p,
+                            y="품목코드",
+                            orientation='h',
                             color=qty_col_p,
                             color_continuous_scale="Viridis",
                             text_auto=",d",
                             labels={"품목코드": "품목(제품명)", qty_col_p: "실제 생산수량"},
-                            title="품목별 실제 완료 생산수량 (공정중복 합산 방지)",
                         )
                         
-                        # [수정] X축 텍스트 잘림 방지 (카테고리형 지정 + -45도 회전 및 아래 마진 확보)
-                        fig_bar.update_xaxes(type='category', tickangle=-45)
-                        fig_bar.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=80))
+                        fig_bar.update_yaxes(type='category', title="")
+                        fig_bar.update_xaxes(title="생산수량 (EA)")
+                        fig_bar.update_layout(
+                            height=dynamic_height,
+                            margin=dict(l=110, r=20, t=10, b=40),
+                            coloraxis_showscale=False
+                        )
                         
                         st.plotly_chart(fig_bar, use_container_width=True)
                     else:
@@ -311,7 +335,6 @@ with tab3:
 # [Tab 4] 실시간 부품 수불 및 재고 흐름 관제 (Flow)
 # ------------------------------------------
 with tab4:
-    # [수정] 대시보드 제목 및 설명 용어 직관화
     st.subheader("🔄 실시간 부품 수불 및 재고 흐름 관제")
     st.caption("마스터시트의 실제 초기재고, 불량 누적, 현재고 데이터를 기반으로 실시간 관제합니다.")
 
@@ -322,7 +345,6 @@ with tab4:
             if df_d.empty:
                 df_d = load_sheet_data("Form_Responses2")
 
-            # 1. 마스터시트 칼럼 정밀 타겟팅 ('이름', '초기재고', '현재고')
             name_col = None
             init_col = None
             curr_col = None
@@ -337,35 +359,29 @@ with tab4:
                     elif "현재고" in col_str:
                         curr_col = col
 
-            # 칼럼 자동 매칭 안전장치 (스크린샷 기반 B열:이름, F열:초기재고, G열:현재고)
             if not name_col and not df_m.empty and len(df_m.columns) >= 2:
-                name_col = df_m.columns[1]  # '이름'
+                name_col = df_m.columns[1]
             if not init_col and not df_m.empty and len(df_m.columns) >= 6:
-                init_col = df_m.columns[5]  # '초기재고'
+                init_col = df_m.columns[5]
             if not curr_col and not df_m.empty and len(df_m.columns) >= 7:
-                curr_col = df_m.columns[6]  # '현재고'
+                curr_col = df_m.columns[6]
 
-            # 2. 정확한 부품 이름 목록 추출 (숫자, '일' 포함 문자 제외)
             item_options = []
             if name_col and not df_m.empty:
                 raw_names = df_m[name_col].dropna().astype(str).str.strip().tolist()
                 for name in raw_names:
-                    # '30일', '40일' 등 납기일이나 순번 숫자 제외 조건
                     if name and not name.endswith("일") and not name.isdigit() and name not in ["nan", "None", "이름", "순번"]:
                         item_options.append(name)
 
             dropdown_options = ["📦 [전체 부품/자재 요약 보기]"] + sorted(list(set(item_options)))
 
-            # --- 드롭다운 선택 ---
             selected_item_option = st.selectbox("🔍 관제할 부품/자재를 선택하세요", dropdown_options)
 
-            # 수량 변수 초기화
             init_stock = 0
             current_stock = 0
             defect_qty = 0
             used_qty = 0
 
-            # 3. 마스터시트에서 초기재고 & 현재고 정확히 로드
             if not df_m.empty and name_col and init_col and curr_col:
                 df_m[init_col] = pd.to_numeric(df_m[init_col].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
                 df_m[curr_col] = pd.to_numeric(df_m[curr_col].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
@@ -379,7 +395,6 @@ with tab4:
                         init_stock = df_target[init_col].values[0]
                         current_stock = df_target[curr_col].values[0]
 
-            # 4. 불량관리 시트 불량 수량 정확 매칭
             if not df_d.empty:
                 d_qty_col = None
                 d_item_col = None
@@ -399,19 +414,16 @@ with tab4:
                         if not df_d_target.empty:
                             defect_qty = df_d_target[d_qty_col].sum()
 
-            # 5. 수불 방정식 계산 (정상 생산 소모량 = 초기재고 - 현재고 - 불량누적)
             total_inflow = init_stock
             if total_inflow < current_stock + defect_qty:
                 total_inflow = current_stock + defect_qty
 
             used_qty = max(0, total_inflow - current_stock - defect_qty)
 
-            # 지표 산출
             total_consumed = used_qty + defect_qty
             depletion_rate = (total_consumed / total_inflow * 100) if total_inflow > 0 else 0
             yield_rate = (used_qty / total_consumed * 100) if total_consumed > 0 else 100
 
-            # --- 상단 KPI 지표 카드 ---
             k1, k2, k3, k4 = st.columns(4)
             with k1:
                 st.metric("📦 초기/총 확보량", f"{int(total_inflow):,} EA")
@@ -424,7 +436,6 @@ with tab4:
 
             st.divider()
 
-            # --- Sankey 파이프라인 그래프 시각화 ---
             labels = [
                 f"총 확보량 ({int(total_inflow):,})",
                 f"정상 생산 소모 ({int(used_qty):,})",
@@ -447,9 +458,9 @@ with tab4:
                             target=[1, 2, 3],
                             value=[max(0.1, used_qty), max(0.1, defect_qty), max(0.1, current_stock)],
                             color=[
-                                "rgba(67,160,71,0.3)",   # 생산 소모 (초록)
-                                "rgba(229,57,53,0.3)",   # 불량 폐기 (빨강)
-                                "rgba(251,140,0,0.3)",   # 현재고 (주황)
+                                "rgba(67,160,71,0.3)",
+                                "rgba(229,57,53,0.3)",
+                                "rgba(251,140,0,0.3)",
                             ],
                         ),
                     )
@@ -463,7 +474,6 @@ with tab4:
             )
             st.plotly_chart(fig_sankey, use_container_width=True)
 
-            # 하단 보조 지표
             sub1, sub2 = st.columns(2)
             with sub1:
                 st.info(f"📊 **부품 총 소진율**: `{depletion_rate:.1f}%` (초기재고 대비 소모/폐기 비율)")
