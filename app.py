@@ -178,7 +178,6 @@ with tab2:
                 with c1:
                     st.markdown("##### 📊 품목(제품)별 실제 생산 수량")
                     if lot_col_p and qty_col_p:
-                        # [LOT 번호 뒤 YYMMDD 6자리 제거]
                         def extract_item_code(lot_str):
                             lot_str = str(lot_str).strip()
                             parts = re.split(r'[_ ]', lot_str)
@@ -189,7 +188,6 @@ with tab2:
                         df_unique_lot["품목코드"] = df_unique_lot[lot_col_p].apply(extract_item_code)
                         grouped_p = df_unique_lot.groupby("품목코드")[qty_col_p].sum().reset_index().sort_values(by=qty_col_p, ascending=False)
 
-                        # 보기 범위 선택 필터
                         f_col1, f_col2 = st.columns([2, 1])
                         with f_col2:
                             view_option = st.selectbox(
@@ -251,7 +249,6 @@ with tab2:
 
                 st.divider()
 
-                # 자재별 불량 발생 내역
                 if not df_defect.empty:
                     st.markdown("##### 📄 자재별 불량 발생 내역 (날짜 및 사유 상세)")
                     
@@ -293,7 +290,6 @@ with tab2:
 
                 st.divider()
 
-                # 원본 생산일지 상세 데이터
                 st.markdown("##### 📄 원본 생산일지 상세 데이터")
                 st.dataframe(df_prod, use_container_width=True, height=350, hide_index=True)
 
@@ -483,74 +479,76 @@ with tab4:
 
 
 # ------------------------------------------
-# [Tab 5] 실제 데이터 연동 안전재고 시뮬레이터 (개선)
+# [Tab 5] 최적 안전재고 시뮬레이터 (품목 완벽 연동)
 # ------------------------------------------
 with tab5:
-    st.subheader("🛡️ 품목별 최적 안전재고(Safety Stock) & 재발주점(ROP) 시뮬레이터")
-    st.caption("실제 생산일지 및 마스터시트 데이터를 기반으로 품목별 맞춤 안전재고와 재발주점을 실시간 산출합니다.")
+    st.subheader("🛡️ 최적 안전재고(Safety Stock) & 재발주점(ROP) 시뮬레이터")
+    st.caption("마스터시트 및 생산일지 실데이터와 직접 연동되어 품목별 권장 안전재고와 재발주점을 계산합니다.")
 
-    # 마스터시트 및 생산일지 데이터 자동 로드 및 파싱
-    try:
-        df_m_sim = load_sheet_data("마스터시트")
-        df_p_sim = load_sheet_data("생산일지")
+    # 1. 생산일지 및 마스터시트 실데이터 기반 품목 추출
+    df_p_data = load_sheet_data("생산일지")
+    df_m_data = load_sheet_data("마스터시트")
 
-        # 품목 목록 자동 수집
-        itemList = []
-        if not df_m_sim.empty and len(df_m_sim.columns) >= 2:
-            raw_items = df_m_sim.iloc[:, 1].dropna().astype(str).str.strip().tolist()
-            for item in raw_items:
-                if item and not item.isdigit() and item not in ["nan", "None", "이름", "순번"]:
-                    itemList.append(item)
+    item_options = ["✏️ [사용자 수동 시뮬레이션 입력]"]
 
-        itemList = sorted(list(set(itemList)))
+    # 생산일지에서 실제 생산된 품목코드 추출
+    if not df_p_data.empty:
+        lot_col = None
+        qty_col = None
+        for c in df_p_data.columns:
+            if "LOT" in c or "롯트" in c: lot_col = c
+            elif "수량" in c: qty_col = c
         
-        # 선택 상자 구성
-        select_options = ["✏️ [사용자 수동 시뮬레이션 입력]"] + [f"📦 {item}" for item in itemList]
-
-        sel_box_col1, sel_box_col2 = st.columns([2, 1])
-        with sel_box_col1:
-            chosen_item = st.selectbox("🔍 분석 및 시뮬레이션할 품목/자재를 선택하세요", select_options)
-        
-        # 실데이터 기반 소모량 자동 계산 초기값
-        default_demand = 250
-        default_std = 50
-
-        if chosen_item != "✏️️ [사용자 수동 시뮬레이션 입력]":
-            pure_item_name = chosen_item.replace("📦 ", "").strip()
+        if lot_col and qty_col:
+            df_p_data[qty_col] = pd.to_numeric(df_p_data[qty_col], errors="coerce").fillna(0)
+            def get_clean_code(l_str):
+                parts = re.split(r'[_ ]', str(l_str).strip())
+                return re.sub(r'[-_]?\d{6}$', '', parts[0])
             
-            # 생산일지에서 해당 품목 수량 데이터 추려내기
-            if not df_p_sim.empty:
-                lot_col = None
-                qty_col = None
-                for c in df_p_sim.columns:
-                    if "LOT" in c or "롯트" in c: lot_col = c
-                    elif "생산수량" in c or "수량" in c: qty_col = c
-                
-                if lot_col and qty_col:
-                    df_p_sim[qty_col] = pd.to_numeric(df_p_sim[qty_col], errors="coerce").fillna(0)
-                    filtered_df = df_p_sim[df_p_sim[lot_col].astype(str).str.contains(pure_item_name, case=False, na=False)]
-                    
-                    if not filtered_df.empty:
-                        quantities = filtered_df[qty_col].values
-                        calc_mean = int(np.mean(quantities))
-                        calc_std = int(np.std(quantities))
-                        
-                        if calc_mean > 0: default_demand = calc_mean
-                        default_std = calc_std if calc_std > 0 else max(10, int(default_demand * 0.2))
+            df_p_data["정제품목"] = df_p_data[lot_col].apply(get_clean_code)
+            top_items = df_p_data.groupby("정제품목")[qty_col].sum().sort_values(ascending=False).index.tolist()
+            item_options.extend([f"📦 {item}" for item in top_items if item])
 
-            st.success(f"✅ **[{pure_item_name}]** 실적 데이터 연동 완료! (일평균 출고량: `{default_demand:,} EA`, 변동성: `{default_std:,} EA`)")
+    # 마스터시트 부품 추가
+    if not df_m_data.empty and len(df_m_data.columns) >= 2:
+        m_items = df_m_data.iloc[:, 1].dropna().astype(str).str.strip().unique()
+        for m_item in m_items:
+            formatted = f"📦 {m_item}"
+            if formatted not in item_options and m_item not in ["nan", "None", "이름"]:
+                item_options.append(formatted)
 
-    except Exception:
-        chosen_item = "✏️ [사용자 수동 시뮬레이션 입력]"
-        default_demand = 250
-        default_std = 50
+    # --- 최상단 드롭다운 UI ---
+    selected_target = st.selectbox(
+        "🔍 분석할 완제품/자재 품목을 선택하세요 (실시간 데이터 연동)",
+        item_options,
+        key="sim_target_select"
+    )
+
+    # 기본값 설정
+    init_demand = 250
+    init_std = 50
+
+    # 선택된 품목이 있으면 생산데이터 분석하여 일평균 및 표준편차 자동 입력
+    if selected_target != "✏️ [사용자 수동 시뮬레이션 입력]" and not df_p_data.empty and "정제품목" in df_p_data.columns:
+        pure_name = selected_target.replace("📦 ", "").strip()
+        matched_df = df_p_data[df_p_data["정제품목"] == pure_name]
+        
+        if not matched_df.empty and qty_col:
+            vals = matched_df[qty_col].values
+            avg_val = int(np.mean(vals))
+            std_val = int(np.std(vals))
+            
+            if avg_val > 0: init_demand = avg_val
+            init_std = std_val if std_val > 0 else max(10, int(init_demand * 0.2))
+            
+            st.success(f"✅ **[{pure_name}]** 실데이터 연동 성공! (최근 평균 생산수량: `{init_demand:,} EA`, 변동성: `{init_std:,} EA`)")
 
     st.divider()
 
     s_col1, s_col2 = st.columns([1, 1])
 
     with s_col1:
-        st.markdown("##### 🎛️ 변수 설정 (자동 연동 및 미세 조정)")
+        st.markdown("##### 🎛️ 변수 설정")
         service_level = st.select_slider(
             "목표 서비스 수준 (품절 방지율 %)",
             options=[80, 85, 90, 95, 98, 99, 99.9],
@@ -559,27 +557,26 @@ with tab5:
         z_dict = {80: 0.84, 85: 1.04, 90: 1.28, 95: 1.65, 98: 2.05, 99: 2.33, 99.9: 3.09}
         z_score = z_dict[service_level]
 
-        avg_demand = st.number_input("일평균 출고량 (D - EA)", min_value=1, max_value=50000, value=int(default_demand), step=10)
-        std_demand = st.number_input("일 출고량 변동성 (σd - 표준편차)", min_value=0, max_value=10000, value=int(default_std), step=5)
+        avg_demand = st.number_input("일평균 출고량 (D - EA)", min_value=1, max_value=100000, value=int(init_demand), step=10)
+        std_demand = st.number_input("일 출고량 변동성 (σd - 표준편차)", min_value=0, max_value=50000, value=int(init_std), step=5)
         lead_time = st.number_input("입고 리드타임 (L - 일)", min_value=1, max_value=180, value=7)
         std_lt = st.number_input("리드타임 지연 변동성 (σL - 일)", min_value=0.0, max_value=30.0, value=1.0, step=0.5)
 
     with s_col2:
-        # 안전재고 표준 공식: Safety Stock = Z * sqrt( (L * σd^2) + (D^2 * σL^2) )
         safety_stock = round(
             z_score * math.sqrt((lead_time * (std_demand**2)) + ((avg_demand**2) * (std_lt**2)))
         )
         lt_demand = avg_demand * lead_time
         rop = lt_demand + safety_stock
 
-        target_title = chosen_item.replace("📦 ", "") if chosen_item != "✏️ [사용자 수동 시뮬레이션 입력]" else "선택 품목"
+        disp_title = selected_target.replace("📦 ", "") if selected_target != "✏️ [사용자 수동 시뮬레이션 입력]" else "시뮬레이션"
 
-        st.markdown(f"##### 📈 [{target_title}] 산출 결과")
+        st.markdown(f"##### 📈 [{disp_title}] 산출 결과")
         r1, r2 = st.columns(2)
         with r1:
             st.metric("🛡️ 권장 안전재고", f"{safety_stock:,} EA", delta=f"Z-Score {z_score} (서비스율 {service_level}%)")
         with r2:
-            st.metric("🔔 목표 재발주점 (ROP)", f"{rop:,} EA", delta=f"실재고가 {rop:,} EA 이하 시 발주 필요")
+            st.metric("🔔 목표 재발주점 (ROP)", f"{rop:,} EA", delta=f"실재고가 {rop:,} EA 이하 시 발주")
 
         fig_rop = go.Figure(
             data=[
