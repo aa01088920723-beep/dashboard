@@ -178,13 +178,17 @@ with tab2:
                 with c1:
                     st.markdown("##### 📊 품목(제품)별 실제 생산 수량")
                     if lot_col_p and qty_col_p:
+                        # [핵심 수정] LOT 번호에서 품목명 원형을 손상 없이 완벽히 추출하는 정제 함수
                         def extract_item_code(lot_str):
                             lot_str = str(lot_str).strip()
-                            match = re.match(r'^([A-Za-z]+[0-9]*[A-Za-z]*)', lot_str)
-                            if match:
-                                code = match.group(1)
-                                return code[:-6] if len(code) > 6 else code
-                            return lot_str[:4]
+                            # 1. 언더바(_)나 공백( ) 기준으로 구분
+                            parts = re.split(r'[_ ]', lot_str)
+                            item_part = parts[0]
+                            
+                            # 2. 하이픈 뒤에 6자리 이상의 날짜/시리얼(예: -261001)만 깔끔하게 제거하고, 
+                            # FIX5550S-18 형태의 규격 하이픈은 온전히 유지
+                            item_part = re.sub(r'-\d{6,}$', '', item_part)
+                            return item_part if item_part else lot_str
 
                         df_unique_lot["품목코드"] = df_unique_lot[lot_col_p].apply(extract_item_code)
                         grouped_p = df_unique_lot.groupby("품목코드")[qty_col_p].sum().reset_index().sort_values(by=qty_col_p, ascending=False)
@@ -205,8 +209,8 @@ with tab2:
                         else:
                             display_df = grouped_p.sort_values(by=qty_col_p, ascending=True)
 
-                        # 품목 수에 맞춘 동적 높이 계산 (최소 380px)
-                        dynamic_height = max(380, len(display_df) * 32 + 60)
+                        # 품목 개수에 맞춘 동적 높이 계산 (최소 380px)
+                        dynamic_height = max(380, len(display_df) * 35 + 60)
 
                         # 가로 막대 차트 (orientation='h')
                         fig_bar = px.bar(
@@ -224,7 +228,7 @@ with tab2:
                         fig_bar.update_xaxes(title="생산수량 (EA)")
                         fig_bar.update_layout(
                             height=dynamic_height,
-                            margin=dict(l=110, r=20, t=10, b=40),
+                            margin=dict(l=150, r=20, t=10, b=40),  # 품목명이 길어저도 안잘리게 좌측 여백(l=150) 대폭 확장
                             coloraxis_showscale=False
                         )
                         
