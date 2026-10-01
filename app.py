@@ -71,7 +71,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
         "📈 완제품 재고 현황",
         "📋 실시간 생산일지",
         "📦 부품/재고 마스터",
-        "🔄 디지털 트윈 (Flow)",
+        "🔄 부품 수불 관제 (Flow)",
         "🛡️ 안전재고 시뮬레이터",
     ]
 )
@@ -199,7 +199,11 @@ with tab2:
                             labels={"품목코드": "품목(제품명)", qty_col_p: "실제 생산수량"},
                             title="품목별 실제 완료 생산수량 (공정중복 합산 방지)",
                         )
-                        fig_bar.update_layout(height=350, margin=dict(l=10, r=10, t=40, b=10))
+                        
+                        # [수정] X축 텍스트 잘림 방지 (카테고리형 지정 + -45도 회전 및 아래 마진 확보)
+                        fig_bar.update_xaxes(type='category', tickangle=-45)
+                        fig_bar.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=80))
+                        
                         st.plotly_chart(fig_bar, use_container_width=True)
                     else:
                         st.info("생산일지 분석 데이터를 확인 중입니다.")
@@ -218,7 +222,7 @@ with tab2:
                             title="자재별 불량 수량 비율",
                             color_discrete_sequence=px.colors.sequential.RdBu,
                         )
-                        fig_defect.update_layout(height=350, margin=dict(l=10, r=10, t=40, b=10))
+                        fig_defect.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
                         st.plotly_chart(fig_defect, use_container_width=True)
                     else:
                         st.info("등록된 불량 데이터가 없습니다.")
@@ -304,10 +308,11 @@ with tab3:
 
 
 # ------------------------------------------
-# [Tab 4] 디지털 트윈 (마스터시트 1:1 완벽 정밀 연동)
+# [Tab 4] 실시간 부품 수불 및 재고 흐름 관제 (Flow)
 # ------------------------------------------
 with tab4:
-    st.subheader("🔄 부품 수불 및 재고 흐름 디지털 트윈 (Flow)")
+    # [수정] 대시보드 제목 및 설명 용어 직관화
+    st.subheader("🔄 실시간 부품 수불 및 재고 흐름 관제")
     st.caption("마스터시트의 실제 초기재고, 불량 누적, 현재고 데이터를 기반으로 실시간 관제합니다.")
 
     with st.spinner("마스터시트 및 품질 데이터를 정밀 연동 중입니다..."):
@@ -395,7 +400,6 @@ with tab4:
                             defect_qty = df_d_target[d_qty_col].sum()
 
             # 5. 수불 방정식 계산 (정상 생산 소모량 = 초기재고 - 현재고 - 불량누적)
-            # 입고 수량이 별도로 있으면 반영하되, 없으면 초기재고 기준으로 정확 계산
             total_inflow = init_stock
             if total_inflow < current_stock + defect_qty:
                 total_inflow = current_stock + defect_qty
@@ -467,7 +471,7 @@ with tab4:
                 st.success(f"✅ **양품 사용율**: `{yield_rate:.1f}%` (소모된 부품 중 양품 비율)")
 
         except Exception as e:
-            st.error(f"디지털 트윈 파이프라인을 생성하는 중 오류가 발생했습니다: {e}")
+            st.error(f"수불 관제 파이프라인을 생성하는 중 오류가 발생했습니다: {e}")
 
 
 # ------------------------------------------
