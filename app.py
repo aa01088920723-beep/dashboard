@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 # ==========================================
@@ -72,7 +73,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
         "📋 실시간 생산일지",
         "📦 부품/재고 마스터",
         "🔄 부품 수불 관제 (Flow)",
-        "🛡️ 안전재고 시뮬레이터",
+        "📅 주간/월간 통합 리포트",
     ]
 )
 
@@ -479,117 +480,188 @@ with tab4:
 
 
 # ------------------------------------------
-# [Tab 5] 최적 안전재고 시뮬레이터 (품목 완벽 연동)
+# [Tab 5] 주간 / 월간 생산 & 품질 통합 리포트
 # ------------------------------------------
 with tab5:
-    st.subheader("🛡️ 최적 안전재고(Safety Stock) & 재발주점(ROP) 시뮬레이터")
-    st.caption("마스터시트 및 생산일지 실데이터와 직접 연동되어 품목별 권장 안전재고와 재발주점을 계산합니다.")
+    st.subheader("📅 주간 / 월간 생산 실적 및 품질 분석 리포트")
+    st.caption("생산일지 및 품질 불량 데이터를 주기별(주간/월간)로 자동 추적 및 정밀 분석합니다.")
 
-    # 1. 생산일지 및 마스터시트 실데이터 기반 품목 추출
-    df_p_data = load_sheet_data("생산일지")
-    df_m_data = load_sheet_data("마스터시트")
+    with st.spinner("생산 및 품질 시상 데이터를 기반으로 통합 리포트를 집계 중입니다..."):
+        try:
+            df_p = load_sheet_data("생산일지")
+            df_d = load_sheet_data("불량관리")
+            if df_d.empty:
+                df_d = load_sheet_data("Form_Responses2")
 
-    item_options = ["✏️ [사용자 수동 시뮬레이션 입력]"]
+            # 1. 컬럼 매핑 파악
+            date_col_p, qty_col_p, lot_col_p = None, None, None
+            if not df_p.empty:
+                for c in df_p.columns:
+                    if "일자" in c or "날짜" in c or "타임스탬프" in c: date_col_p = c
+                    elif "생산수량" in c or "수량" in c: qty_col_p = c
+                    elif "LOT" in c or "롯트" in c: lot_col_p = c
 
-    # 생산일지에서 실제 생산된 품목코드 추출
-    if not df_p_data.empty:
-        lot_col = None
-        qty_col = None
-        for c in df_p_data.columns:
-            if "LOT" in c or "롯트" in c: lot_col = c
-            elif "수량" in c: qty_col = c
-        
-        if lot_col and qty_col:
-            df_p_data[qty_col] = pd.to_numeric(df_p_data[qty_col], errors="coerce").fillna(0)
-            def get_clean_code(l_str):
-                parts = re.split(r'[_ ]', str(l_str).strip())
-                return re.sub(r'[-_]?\d{6}$', '', parts[0])
-            
-            df_p_data["정제품목"] = df_p_data[lot_col].apply(get_clean_code)
-            top_items = df_p_data.groupby("정제품목")[qty_col].sum().sort_values(ascending=False).index.tolist()
-            item_options.extend([f"📦 {item}" for item in top_items if item])
+                if not qty_col_p:
+                    nums = find_numeric_cols(df_p)
+                    qty_col_p = nums[0] if nums else None
 
-    # 마스터시트 부품 추가
-    if not df_m_data.empty and len(df_m_data.columns) >= 2:
-        m_items = df_m_data.iloc[:, 1].dropna().astype(str).str.strip().unique()
-        for m_item in m_items:
-            formatted = f"📦 {m_item}"
-            if formatted not in item_options and m_item not in ["nan", "None", "이름"]:
-                item_options.append(formatted)
+            date_col_d, qty_col_d, item_col_d = None, None, None
+            if not df_d.empty:
+                for c in df_d.columns:
+                    if "일자" in c or "날짜" in c or "타임스탬프" in c: date_col_d = c
+                    elif "수량" in c: qty_col_d = c
+                    elif "자재" in c or "품목" in c or "부품" in c: item_col_d = c
 
-    # --- 최상단 드롭다운 UI ---
-    selected_target = st.selectbox(
-        "🔍 분석할 완제품/자재 품목을 선택하세요 (실시간 데이터 연동)",
-        item_options,
-        key="sim_target_select"
-    )
+            if df_p.empty or not date_col_p or not qty_col_p:
+                st.warning("⚠️ 분석할 생산일지 데이터가 존재하지 않거나 일자/수량 항목이 올바르지 않습니다.")
+            else:
+                # 데이터 전처리
+                df_p[qty_col_p] = pd.to_numeric(df_p[qty_col_p], errors="coerce").fillna(0)
+                df_p["작업일시"] = pd.to_datetime(df_p[date_col_p], errors="coerce")
+                df_p = df_p.dropna(subset=["작업일시"])
 
-    # 기본값 설정
-    init_demand = 250
-    init_std = 50
+                # 품목 코드 추출
+                def extract_item(l_str):
+                    parts = re.split(r'[_ ]', str(l_str).strip())
+                    return re.sub(r'[-_]?\d{6}$', '', parts[0]) if parts else "미지정"
 
-    # 선택된 품목이 있으면 생산데이터 분석하여 일평균 및 표준편차 자동 입력
-    if selected_target != "✏️ [사용자 수동 시뮬레이션 입력]" and not df_p_data.empty and "정제품목" in df_p_data.columns:
-        pure_name = selected_target.replace("📦 ", "").strip()
-        matched_df = df_p_data[df_p_data["정제품목"] == pure_name]
-        
-        if not matched_df.empty and qty_col:
-            vals = matched_df[qty_col].values
-            avg_val = int(np.mean(vals))
-            std_val = int(np.std(vals))
-            
-            if avg_val > 0: init_demand = avg_val
-            init_std = std_val if std_val > 0 else max(10, int(init_demand * 0.2))
-            
-            st.success(f"✅ **[{pure_name}]** 실데이터 연동 성공! (최근 평균 생산수량: `{init_demand:,} EA`, 변동성: `{init_std:,} EA`)")
+                df_p["품목코드"] = df_p[lot_col_p].apply(extract_item) if lot_col_p else "기본품목"
 
-    st.divider()
+                # 불량 데이터 전처리
+                if not df_d.empty and date_col_d and qty_col_d:
+                    df_d[qty_col_d] = pd.to_numeric(df_d[qty_col_d], errors="coerce").fillna(0)
+                    df_d["작업일시"] = pd.to_datetime(df_d[date_col_d], errors="coerce")
+                    df_d = df_d.dropna(subset=["작업일시"])
+                else:
+                    df_d = pd.DataFrame(columns=["작업일시", "불량수량"])
 
-    s_col1, s_col2 = st.columns([1, 1])
+                # --- 리포트 조건 선택 UI ---
+                r_col1, r_col2 = st.columns([1, 2])
+                with r_col1:
+                    period_type = st.radio("📊 분석 주기 선택", ["주간 단위 (Weekly)", "월간 단위 (Monthly)"], horizontal=True)
 
-    with s_col1:
-        st.markdown("##### 🎛️ 변수 설정")
-        service_level = st.select_slider(
-            "목표 서비스 수준 (품절 방지율 %)",
-            options=[80, 85, 90, 95, 98, 99, 99.9],
-            value=95,
-        )
-        z_dict = {80: 0.84, 85: 1.04, 90: 1.28, 95: 1.65, 98: 2.05, 99: 2.33, 99.9: 3.09}
-        z_score = z_dict[service_level]
+                # 날짜 그룹 키 추가
+                if "주간" in period_type:
+                    df_p["기간그룹"] = df_p["작업일시"].dt.strftime("%Y-W%U (주)")
+                    if not df_d.empty:
+                        df_d["기간그룹"] = df_d["작업일시"].dt.strftime("%Y-W%U (주)")
+                else:
+                    df_p["기간그룹"] = df_p["작업일시"].dt.strftime("%Y-%m (월)")
+                    if not df_d.empty:
+                        df_d["기간그룹"] = df_d["작업일시"].dt.strftime("%Y-%m (월)")
 
-        avg_demand = st.number_input("일평균 출고량 (D - EA)", min_value=1, max_value=100000, value=int(init_demand), step=10)
-        std_demand = st.number_input("일 출고량 변동성 (σd - 표준편차)", min_value=0, max_value=50000, value=int(init_std), step=5)
-        lead_time = st.number_input("입고 리드타임 (L - 일)", min_value=1, max_value=180, value=7)
-        std_lt = st.number_input("리드타임 지연 변동성 (σL - 일)", min_value=0.0, max_value=30.0, value=1.0, step=0.5)
+                # 공정 중복 제거 기준 생산 집계
+                if lot_col_p:
+                    df_p_unique = df_p.groupby(["기간그룹", lot_col_p, "품목코드"])[qty_col_p].max().reset_index()
+                else:
+                    df_p_unique = df_p
 
-    with s_col2:
-        safety_stock = round(
-            z_score * math.sqrt((lead_time * (std_demand**2)) + ((avg_demand**2) * (std_lt**2)))
-        )
-        lt_demand = avg_demand * lead_time
-        rop = lt_demand + safety_stock
+                prod_summary = df_p_unique.groupby("기간그룹")[qty_col_p].sum().reset_index()
+                prod_summary.columns = ["기간그룹", "생산수량"]
 
-        disp_title = selected_target.replace("📦 ", "") if selected_target != "✏️ [사용자 수동 시뮬레이션 입력]" else "시뮬레이션"
+                if not df_d.empty and "기간그룹" in df_d.columns:
+                    defect_summary = df_d.groupby("기간그룹")[qty_col_d].sum().reset_index()
+                    defect_summary.columns = ["기간그룹", "불량수량"]
+                else:
+                    defect_summary = pd.DataFrame(columns=["기간그룹", "불량수량"])
 
-        st.markdown(f"##### 📈 [{disp_title}] 산출 결과")
-        r1, r2 = st.columns(2)
-        with r1:
-            st.metric("🛡️ 권장 안전재고", f"{safety_stock:,} EA", delta=f"Z-Score {z_score} (서비스율 {service_level}%)")
-        with r2:
-            st.metric("🔔 목표 재발주점 (ROP)", f"{rop:,} EA", delta=f"실재고가 {rop:,} EA 이하 시 발주")
+                # 데이터 통합
+                report_df = pd.merge(prod_summary, defect_summary, on="기간그룹", how="left").fillna(0)
+                report_df["총출하량"] = report_df["생산수량"] + report_df["불량수량"]
+                report_df["불량률(%)"] = np.where(
+                    report_df["총출하량"] > 0,
+                    (report_df["불량수량"] / report_df["총출하량"]) * 100,
+                    0
+                )
+                report_df = report_df.sort_values(by="기간그룹")
 
-        fig_rop = go.Figure(
-            data=[
-                go.Bar(name="리드타임 소요량", x=["재발주점(ROP)"], y=[lt_demand], marker_color="#1e88e5", text=[f"{lt_demand:,} EA"], textposition="inside"),
-                go.Bar(
-                    name="안전재고(방어용)", x=["재발주점(ROP)"], y=[safety_stock], marker_color="#e53935", text=[f"{safety_stock:,} EA"], textposition="inside"
-                ),
-            ]
-        )
-        fig_rop.update_layout(
-            barmode="stack",
-            height=260,
-            margin=dict(l=20, r=20, t=20, b=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        )
-        st.plotly_chart(fig_rop, use_container_width=True)
+                # --- 상단 핵심 KPI 요약 ---
+                st.divider()
+                tot_p = report_df["생산수량"].sum()
+                tot_d = report_df["불량수량"].sum()
+                avg_rate = (tot_d / (tot_p + tot_d) * 100) if (tot_p + tot_d) > 0 else 0
+
+                kpi_a, kpi_b, kpi_c, kpi_d = st.columns(4)
+                with kpi_a:
+                    st.metric("총 분석 기간 수", f"{len(report_df):,} 개 주기")
+                with kpi_b:
+                    st.metric("기간 총 생산량", f"{int(tot_p):,} EA")
+                with kpi_c:
+                    st.metric("기간 총 불량량", f"{int(tot_d):,} EA", delta=f"-{int(tot_d):,}", delta_color="inverse")
+                with kpi_d:
+                    st.metric("평균 불량률", f"{avg_rate:.2f} %")
+
+                st.divider()
+
+                # --- 1. 생산량 & 불량률 추이 차트 (이중 축) ---
+                st.markdown("##### 📈 기간별 생산 실적 및 불량률 추이")
+                
+                fig_trend = make_subplots(specs=[[{"secondary_y": True}]])
+                
+                fig_trend.add_trace(
+                    go.Bar(
+                        x=report_df["기간그룹"],
+                        y=report_df["생산수량"],
+                        name="생산수량 (EA)",
+                        marker_color="#1f77b4",
+                        text=report_df["생산수량"].apply(lambda x: f"{int(x):,}"),
+                        textposition="inside"
+                    ),
+                    secondary_y=False,
+                )
+
+                fig_trend.add_trace(
+                    go.Scatter(
+                        x=report_df["기간그룹"],
+                        y=report_df["불량률(%)"],
+                        name="불량률 (%)",
+                        mode="lines+markers+text",
+                        line=dict(color="#d62728", width=3),
+                        text=report_df["불량률(%)"].apply(lambda x: f"{x:.1f}%"),
+                        textposition="top center"
+                    ),
+                    secondary_y=True,
+                )
+
+                fig_trend.update_xaxes(title_text="분석 주기")
+                fig_trend.update_yaxes(title_text="생산 수량 (EA)", secondary_y=False)
+                fig_trend.update_yaxes(title_text="불량률 (%)", secondary_y=True)
+                fig_trend.update_layout(
+                    height=400,
+                    margin=dict(l=20, r=20, t=30, b=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+
+                st.plotly_chart(fig_trend, use_container_width=True)
+
+                # --- 2. 기간별 품목 생산 비중 분석 ---
+                st.markdown("##### 📦 기간별 품목(제품) 생산 구성 비중")
+                item_group = df_p_unique.groupby(["기간그룹", "품목코드"])[qty_col_p].sum().reset_index()
+
+                fig_item = px.bar(
+                    item_group,
+                    x="기간그룹",
+                    y=qty_col_p,
+                    color="품목코드",
+                    title="주기별 주요 생산 품목 구성",
+                    labels={qty_col_p: "생산수량 (EA)", "기간그룹": "분석 주기"},
+                    color_discrete_sequence=px.colors.qualitative.Set2
+                )
+                fig_item.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_item, use_container_width=True)
+
+                # --- 3. 데이터 요약 상세 테이블 ---
+                st.markdown("##### 📋 주기별 생산 및 품질 종합 분석표")
+                disp_report = report_df.copy()
+                disp_report.columns = ["분석 기간", "양품 생산수량 (EA)", "불량 발생수량 (EA)", "총 출하수량 (EA)", "공정 불량률 (%)"]
+                
+                # 수력 포맷팅
+                disp_report["양품 생산수량 (EA)"] = disp_report["양품 생산수량 (EA)"].map("{:,.0f}".format)
+                disp_report["불량 발생수량 (EA)"] = disp_report["불량 발생수량 (EA)"].map("{:,.0f}".format)
+                disp_report["총 출하수량 (EA)"] = disp_report["총 출하수량 (EA)"].map("{:,.0f}".format)
+                disp_report["공정 불량률 (%)"] = disp_report["공정 불량률 (%)"].map("{:.2f}%".format)
+
+                st.dataframe(disp_report, use_container_width=True, hide_index=True)
+
+        except Exception as e:
+            st.error(f"주간/월간 분석 리포트 생성 중 오류가 발생했습니다: {e}")
