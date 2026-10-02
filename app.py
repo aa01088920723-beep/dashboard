@@ -73,6 +73,35 @@ def clean_date_series(series: pd.Series) -> pd.Series:
     return pd.to_datetime(s_clean, errors="coerce")
 
 
+def get_korean_week_label(dt: pd.Timestamp) -> str:
+    """
+    수요일이 속한 월을 기준 월로 삼아 N월 M주차 (MM/DD~MM/DD) 형태의 문자열을 반환
+    """
+    if pd.isna(dt):
+        return "미지정"
+    
+    # 1. 해당 주차의 월요일, 수요일, 금요일 계산
+    monday = dt - pd.Timedelta(days=dt.weekday())  # 월요일 (Mon=0)
+    wednesday = monday + pd.Timedelta(days=2)      # 수요일
+    friday = monday + pd.Timedelta(days=4)         # 금요일
+    
+    # 2. 수요일이 속한 월 및 연도 구하기
+    target_year = wednesday.year
+    target_month = wednesday.month
+    
+    # 3. 그 달(target_month)의 첫 번째 수요일 구하기
+    first_day_of_month = pd.Timestamp(year=target_year, month=target_month, day=1)
+    days_to_first_wed = (2 - first_day_of_month.weekday()) % 7
+    first_wednesday = first_day_of_month + pd.Timedelta(days=days_to_first_wed)
+    
+    # 4. 몇 번째 수요일인지 계산 (1주차부터 시작)
+    week_num = (wednesday.day - first_wednesday.day) // 7 + 1
+    
+    # 5. 직관적인 레이블 생성 (예: '9월 2주차 (09/07~09/11)')
+    date_range = f"{monday.strftime('%m/%d')}~{friday.strftime('%m/%d')}"
+    return f"{target_month}월 {week_num}주차 ({date_range})"
+
+
 # ==========================================
 # 3. 메인 탭 구성
 # ==========================================
@@ -539,7 +568,7 @@ with tab5:
             if df_p.empty or not date_col_p or not qty_col_p:
                 st.warning("⚠️ 분석할 생산일지 데이터가 존재하지 않거나 일자/수량 항목이 올바르지 않습니다.")
             else:
-                # [수정포인트 1] 데이터 전처리 & 날짜 정제 적용
+                # 데이터 전처리 & 한글 날짜 파싱 적용
                 df_p[qty_col_p] = pd.to_numeric(
                     df_p[qty_col_p].astype(str).str.replace(',', ''), errors="coerce"
                 ).fillna(0)
@@ -572,18 +601,15 @@ with tab5:
                 with r_col1:
                     period_type = st.radio("📊 분석 주기 선택", ["주간 단위 (Weekly)", "월간 단위 (Monthly)"], horizontal=True)
 
-                # [수정포인트 2] 날짜 그룹 키 추가 (ISO 주차 연산으로 안정화)
+                # 수요일 기준 월별 주차 레이블 변환 적용
                 if "주간" in period_type:
-                    iso_p = df_p["작업일시"].dt.isocalendar()
-                    df_p["기간그룹"] = iso_p.year.astype(str) + "-W" + iso_p.week.astype(str).str.zfill(2) + " (주)"
-                    
+                    df_p["기간그룹"] = df_p["작업일시"].apply(get_korean_week_label)
                     if not df_d.empty and "작업일시" in df_d.columns:
-                        iso_d = df_d["작업일시"].dt.isocalendar()
-                        df_d["기간그룹"] = iso_d.year.astype(str) + "-W" + iso_d.week.astype(str).str.zfill(2) + " (주)"
+                        df_d["기간그룹"] = df_d["작업일시"].apply(get_korean_week_label)
                 else:
-                    df_p["기간그룹"] = df_p["작업일시"].dt.strftime("%Y-%m (월)")
+                    df_p["기간그룹"] = df_p["작업일시"].dt.strftime("%Y년 %m월")
                     if not df_d.empty and "작업일시" in df_d.columns:
-                        df_d["기간그룹"] = df_d["작업일시"].dt.strftime("%Y-%m (월)")
+                        df_d["기간그룹"] = df_d["작업일시"].dt.strftime("%Y년 %m월")
 
                 # 공정 중복 제거 기준 생산 집계
                 if lot_col_p:
