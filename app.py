@@ -46,7 +46,7 @@ DOCUMENT_ID = "1cJEuRJ8Sbgb-PF0-xta0j7J2MqoYlATWXRk907DZPnc"
 
 
 # ==========================================
-# 2. 데이터 로드 함수
+# 2. 데이터 로드 및 날짜 정제 유틸리티 함수
 # ==========================================
 @st.cache_data(ttl=5)
 def load_sheet_data(sheet_name: str) -> pd.DataFrame:
@@ -62,6 +62,15 @@ def load_sheet_data(sheet_name: str) -> pd.DataFrame:
 
 def find_numeric_cols(df):
     return df.select_dtypes(include=[np.number]).columns.tolist()
+
+
+def clean_date_series(series: pd.Series) -> pd.Series:
+    """구글 시트의 다양한 날짜/타임스탬프 한글 형식을 표준 datetime 형태로 안전 변환"""
+    s_clean = series.astype(str).str.strip()
+    s_clean = s_clean.str.replace("오전", "AM").str.replace("오후", "PM")
+    s_clean = s_clean.str.replace(".", "-", regex=False)
+    s_clean = s_clean.str.replace("년", "-").str.replace("월", "-").str.replace("일", "")
+    return pd.to_datetime(s_clean, errors="coerce")
 
 
 # ==========================================
@@ -112,11 +121,12 @@ with tab2:
                 date_col_p = None
 
                 for col in df_prod.columns:
-                    if "생산수량" in col or "수량" in col:
+                    col_str = str(col).strip()
+                    if "생산수량" in col_str or "수량" in col_str:
                         qty_col_p = col
-                    elif "LOT" in col or "롯트" in col:
+                    elif "LOT" in col_str or "롯트" in col_str:
                         lot_col_p = col
-                    elif "일자" in col or "날짜" in col or "타임스탬프" in col:
+                    elif "일자" in col_str or "날짜" in col_str or "타임스탬프" in col_str:
                         date_col_p = col
 
                 if not qty_col_p:
@@ -124,7 +134,9 @@ with tab2:
                     qty_col_p = num_cols_p[0] if num_cols_p else None
 
                 if qty_col_p:
-                    df_prod[qty_col_p] = pd.to_numeric(df_prod[qty_col_p], errors="coerce").fillna(0)
+                    df_prod[qty_col_p] = pd.to_numeric(
+                        df_prod[qty_col_p].astype(str).str.replace(',', ''), errors="coerce"
+                    ).fillna(0)
 
                 # 공정 중복 입력 제거 후 실제 생산 수량 계산
                 if lot_col_p and qty_col_p:
@@ -141,15 +153,18 @@ with tab2:
 
                 if not df_defect.empty:
                     for col in df_defect.columns:
-                        if "수량" in col:
+                        col_str = str(col).strip()
+                        if "수량" in col_str:
                             defect_qty_col = col
-                        elif "일자" in col or "날짜" in col or "타임스탬프" in col:
+                        elif "일자" in col_str or "날짜" in col_str or "타임스탬프" in col_str:
                             defect_date_col = col
-                        elif "자재" in col or "품목" in col or "부품" in col:
+                        elif "자재" in col_str or "품목" in col_str or "부품" in col_str:
                             defect_item_col = col
 
                     if defect_qty_col:
-                        df_defect[defect_qty_col] = pd.to_numeric(df_defect[defect_qty_col], errors="coerce").fillna(0)
+                        df_defect[defect_qty_col] = pd.to_numeric(
+                            df_defect[defect_qty_col].astype(str).str.replace(',', ''), errors="coerce"
+                        ).fillna(0)
                         total_defect = df_defect[defect_qty_col].sum()
 
                 total_output = total_qty + total_defect
@@ -394,9 +409,10 @@ with tab4:
                 d_qty_col = None
                 d_item_col = None
                 for col in df_d.columns:
-                    if "수량" in col:
+                    col_str = str(col).strip()
+                    if "수량" in col_str:
                         d_qty_col = col
-                    elif "자재" in col or "품목" in col or "부품" in col:
+                    elif "자재" in col_str or "품목" in col_str or "부품" in col_str:
                         d_item_col = col
 
                 if d_qty_col:
@@ -425,7 +441,7 @@ with tab4:
             with k2:
                 st.metric("⚙️ 정상 생산 소모량", f"{int(used_qty):,} EA")
             with k3:
-                st.metric("⚠️ 불량 폐기 누적량", f"{int(defect_qty):,} EA", delta=f"-{int(defect_qty):,} EA" if defect_qty > 0 else "0", delta_color="inverse")
+                st.metric("⚠️ 불량 폐기 누적량", f"{int(defect_qty):,} EA", delta=f"-{int(defect_qty):,}" if defect_qty > 0 else "0", delta_color="inverse")
             with k4:
                 st.metric("🏭 창고 현재고량", f"{int(current_stock):,} EA")
 
@@ -497,9 +513,13 @@ with tab5:
             date_col_p, qty_col_p, lot_col_p = None, None, None
             if not df_p.empty:
                 for c in df_p.columns:
-                    if "일자" in c or "날짜" in c or "타임스탬프" in c: date_col_p = c
-                    elif "생산수량" in c or "수량" in c: qty_col_p = c
-                    elif "LOT" in c or "롯트" in c: lot_col_p = c
+                    col_str = str(c).strip()
+                    if "일자" in col_str or "날짜" in col_str or "타임스탬프" in col_str:
+                        date_col_p = c
+                    elif "생산수량" in col_str or "수량" in col_str:
+                        qty_col_p = c
+                    elif "LOT" in col_str or "롯트" in col_str:
+                        lot_col_p = c
 
                 if not qty_col_p:
                     nums = find_numeric_cols(df_p)
@@ -508,46 +528,61 @@ with tab5:
             date_col_d, qty_col_d, item_col_d = None, None, None
             if not df_d.empty:
                 for c in df_d.columns:
-                    if "일자" in c or "날짜" in c or "타임스탬프" in c: date_col_d = c
-                    elif "수량" in c: qty_col_d = c
-                    elif "자재" in c or "품목" in c or "부품" in c: item_col_d = c
+                    col_str = str(c).strip()
+                    if "일자" in col_str or "날짜" in col_str or "타임스탬프" in col_str:
+                        date_col_d = c
+                    elif "수량" in col_str:
+                        qty_col_d = c
+                    elif "자재" in col_str or "품목" in col_str or "부품" in col_str:
+                        item_col_d = c
 
             if df_p.empty or not date_col_p or not qty_col_p:
                 st.warning("⚠️ 분석할 생산일지 데이터가 존재하지 않거나 일자/수량 항목이 올바르지 않습니다.")
             else:
-                # 데이터 전처리
-                df_p[qty_col_p] = pd.to_numeric(df_p[qty_col_p], errors="coerce").fillna(0)
-                df_p["작업일시"] = pd.to_datetime(df_p[date_col_p], errors="coerce")
-                df_p = df_p.dropna(subset=["작업일시"])
+                # [수정포인트 1] 데이터 전처리 & 날짜 정제 적용
+                df_p[qty_col_p] = pd.to_numeric(
+                    df_p[qty_col_p].astype(str).str.replace(',', ''), errors="coerce"
+                ).fillna(0)
+                df_p["작업일시"] = clean_date_series(df_p[date_col_p])
+                df_p = df_p.dropna(subset=["작업일시"]).copy()
 
                 # 품목 코드 추출
                 def extract_item(l_str):
-                    parts = re.split(r'[_ ]', str(l_str).strip())
-                    return re.sub(r'[-_]?\d{6}$', '', parts[0]) if parts else "미지정"
+                    l_str = str(l_str).strip()
+                    if not l_str or l_str.lower() in ["nan", "none"]:
+                        return "미지정"
+                    parts = re.split(r'[_ ]', l_str)
+                    res = re.sub(r'[-_]?\d{6}$', '', parts[0])
+                    return res if res else "미지정"
 
                 df_p["품목코드"] = df_p[lot_col_p].apply(extract_item) if lot_col_p else "기본품목"
 
                 # 불량 데이터 전처리
                 if not df_d.empty and date_col_d and qty_col_d:
-                    df_d[qty_col_d] = pd.to_numeric(df_d[qty_col_d], errors="coerce").fillna(0)
-                    df_d["작업일시"] = pd.to_datetime(df_d[date_col_d], errors="coerce")
-                    df_d = df_d.dropna(subset=["작업일시"])
+                    df_d[qty_col_d] = pd.to_numeric(
+                        df_d[qty_col_d].astype(str).str.replace(',', ''), errors="coerce"
+                    ).fillna(0)
+                    df_d["작업일시"] = clean_date_series(df_d[date_col_d])
+                    df_d = df_d.dropna(subset=["작업일시"]).copy()
                 else:
-                    df_d = pd.DataFrame(columns=["작업일시", "불량수량"])
+                    df_d = pd.DataFrame(columns=["작업일시", qty_col_d if qty_col_d else "불량수량"])
 
                 # --- 리포트 조건 선택 UI ---
                 r_col1, r_col2 = st.columns([1, 2])
                 with r_col1:
                     period_type = st.radio("📊 분석 주기 선택", ["주간 단위 (Weekly)", "월간 단위 (Monthly)"], horizontal=True)
 
-                # 날짜 그룹 키 추가
+                # [수정포인트 2] 날짜 그룹 키 추가 (ISO 주차 연산으로 안정화)
                 if "주간" in period_type:
-                    df_p["기간그룹"] = df_p["작업일시"].dt.strftime("%Y-W%U (주)")
-                    if not df_d.empty:
-                        df_d["기간그룹"] = df_d["작업일시"].dt.strftime("%Y-W%U (주)")
+                    iso_p = df_p["작업일시"].dt.isocalendar()
+                    df_p["기간그룹"] = iso_p.year.astype(str) + "-W" + iso_p.week.astype(str).str.zfill(2) + " (주)"
+                    
+                    if not df_d.empty and "작업일시" in df_d.columns:
+                        iso_d = df_d["작업일시"].dt.isocalendar()
+                        df_d["기간그룹"] = iso_d.year.astype(str) + "-W" + iso_d.week.astype(str).str.zfill(2) + " (주)"
                 else:
                     df_p["기간그룹"] = df_p["작업일시"].dt.strftime("%Y-%m (월)")
-                    if not df_d.empty:
+                    if not df_d.empty and "작업일시" in df_d.columns:
                         df_d["기간그룹"] = df_d["작업일시"].dt.strftime("%Y-%m (월)")
 
                 # 공정 중복 제거 기준 생산 집계
@@ -559,7 +594,7 @@ with tab5:
                 prod_summary = df_p_unique.groupby("기간그룹")[qty_col_p].sum().reset_index()
                 prod_summary.columns = ["기간그룹", "생산수량"]
 
-                if not df_d.empty and "기간그룹" in df_d.columns:
+                if not df_d.empty and "기간그룹" in df_d.columns and qty_col_d in df_d.columns:
                     defect_summary = df_d.groupby("기간그룹")[qty_col_d].sum().reset_index()
                     defect_summary.columns = ["기간그룹", "불량수량"]
                 else:
@@ -587,7 +622,7 @@ with tab5:
                 with kpi_b:
                     st.metric("기간 총 생산량", f"{int(tot_p):,} EA")
                 with kpi_c:
-                    st.metric("기간 총 불량량", f"{int(tot_d):,} EA", delta=f"-{int(tot_d):,}", delta_color="inverse")
+                    st.metric("기간 총 불량량", f"{int(tot_d):,} EA", delta=f"-{int(tot_d):,}" if tot_d > 0 else "0", delta_color="inverse")
                 with kpi_d:
                     st.metric("평균 불량률", f"{avg_rate:.2f} %")
 
@@ -655,7 +690,7 @@ with tab5:
                 disp_report = report_df.copy()
                 disp_report.columns = ["분석 기간", "양품 생산수량 (EA)", "불량 발생수량 (EA)", "총 출하수량 (EA)", "공정 불량률 (%)"]
                 
-                # 수력 포맷팅
+                # 수량 포맷팅
                 disp_report["양품 생산수량 (EA)"] = disp_report["양품 생산수량 (EA)"].map("{:,.0f}".format)
                 disp_report["불량 발생수량 (EA)"] = disp_report["불량 발생수량 (EA)"].map("{:,.0f}".format)
                 disp_report["총 출하수량 (EA)"] = disp_report["총 출하수량 (EA)"].map("{:,.0f}".format)
