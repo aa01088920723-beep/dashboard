@@ -570,7 +570,7 @@ with tab5:
                         item_col_d = c
 
             if df_p.empty or not date_col_p or not qty_col_p:
-                st.warning("⚠️️ 분석할 생산일지 데이터가 존재하지 않거나 일자/수량 항목이 올바르지 않습니다.")
+                st.warning("⚠️ 분석할 생산일지 데이터가 존재하지 않거나 일자/수량 항목이 올바르지 않습니다.")
             else:
                 # 데이터 전처리 & 한글 날짜 파싱 적용
                 df_p[qty_col_p] = pd.to_numeric(
@@ -746,15 +746,21 @@ with tab6:
             df_fg_out = load_sheet_data("OUT", doc_id=FINISHED_GOODS_DOC_ID)
             df_parts = load_sheet_data("마스터시트", doc_id=DOCUMENT_ID)
 
-            # 날짜 정제 및 기준월 추출
+            # 날짜 파싱
             if not df_fg_in.empty and "타임스탬프" in df_fg_in.columns:
                 df_fg_in["작업일시"] = clean_date_series(df_fg_in["타임스탬프"])
             elif not df_fg_in.empty and len(df_fg_in.columns) > 0:
                 df_fg_in["작업일시"] = clean_date_series(df_fg_in.iloc[:, 0])
 
+            if not df_fg_out.empty and "타임스탬프" in df_fg_out.columns:
+                df_fg_out["작업일시"] = clean_date_series(df_fg_out["타임스탬프"])
+            elif not df_fg_out.empty and len(df_fg_out.columns) > 0:
+                df_fg_out["작업일시"] = clean_date_series(df_fg_out.iloc[:, 0])
+
             available_months = []
-            if "작업일시" in df_fg_in.columns:
-                available_months = sorted(df_fg_in["작업일시"].dt.strftime("%Y-%m").dropna().unique(), reverse=True)
+            if "작업일시" in df_fg_in.columns and not df_fg_in["작업일시"].dropna().empty:
+                df_fg_in["YM"] = df_fg_in["작업일시"].dt.strftime("%Y-%m")
+                available_months = sorted(df_fg_in["YM"].dropna().unique(), reverse=True)
 
             if not available_months:
                 available_months = ["2026-09", "2026-08", "2026-07", "2026-06"]
@@ -776,10 +782,9 @@ with tab6:
 
                 df_fg_in[c_qty] = pd.to_numeric(df_fg_in[c_qty].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
                 
-                # 선택월까지 누적 입고
-                if "작업일시" in df_fg_in.columns:
-                    filter_date = pd.to_datetime(f"{selected_month}-31", errors="coerce")
-                    df_in_filtered = df_fg_in[df_fg_in["작업일시"] <= filter_date]
+                # 안전한 월별 누적 필터링 (선택 연월보다 작거나 같은 데이터)
+                if "YM" in df_fg_in.columns:
+                    df_in_filtered = df_fg_in[df_fg_in["YM"] <= selected_month]
                 else:
                     df_in_filtered = df_fg_in
 
@@ -795,12 +800,20 @@ with tab6:
                     co_qty = out_qty_col[0] if out_qty_col else df_fg_out.columns[3]
 
                     df_fg_out[co_qty] = pd.to_numeric(df_fg_out[co_qty].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
-                    fg_out_summary = df_fg_out.groupby(co_item)[co_qty].sum().reset_index()
+                    
+                    if "작업일시" in df_fg_out.columns and not df_fg_out["작업일시"].dropna().empty:
+                        df_fg_out["YM"] = df_fg_out["작업일시"].dt.strftime("%Y-%m")
+                        df_out_filtered = df_fg_out[df_fg_out["YM"] <= selected_month]
+                    else:
+                        df_out_filtered = df_fg_out
+
+                    fg_out_summary = df_out_filtered.groupby(co_item)[co_qty].sum().reset_index()
                     fg_out_summary.columns = ["완제품명", "총 출하수량"]
 
                 # 완제품 최종 재고 계산
-                fg_merged = pd.merge(fg_in_summary, fg_out_summary, on="완제품명", how="left").fillna(0)
+                fg_merged = pd.merge(fg_in_summary, fg_out_summary, on="완제품명", how="outer").fillna(0)
                 fg_merged["현재 완제품 재고량"] = fg_merged["총 입고수량"] - fg_merged["총 출하수량"]
+                fg_merged = fg_merged.sort_values(by="현재 완제품 재고량", ascending=False)
 
                 # 포맷 적용
                 fg_display = fg_merged.copy()
@@ -841,3 +854,4 @@ with tab6:
 
         except Exception as e:
             st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")
+             
