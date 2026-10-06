@@ -79,39 +79,40 @@ def get_korean_week_label(dt: pd.Timestamp) -> str:
     """
     if pd.isna(dt):
         return "미지정"
-    
+
     # 1. 해당 주차의 월요일, 수요일, 금요일 계산
     monday = dt - pd.Timedelta(days=dt.weekday())  # 월요일 (Mon=0)
     wednesday = monday + pd.Timedelta(days=2)      # 수요일
     friday = monday + pd.Timedelta(days=4)         # 금요일
-    
+
     # 2. 수요일이 속한 월 및 연도 구하기
     target_year = wednesday.year
     target_month = wednesday.month
-    
+
     # 3. 그 달(target_month)의 첫 번째 수요일 구하기
     first_day_of_month = pd.Timestamp(year=target_year, month=target_month, day=1)
     days_to_first_wed = (2 - first_day_of_month.weekday()) % 7
     first_wednesday = first_day_of_month + pd.Timedelta(days=days_to_first_wed)
-    
+
     # 4. 몇 번째 수요일인지 계산 (1주차부터 시작)
     week_num = (wednesday.day - first_wednesday.day) // 7 + 1
-    
+
     # 5. 직관적인 레이블 생성 (예: '9월 2주차 (09/07~09/11)')
     date_range = f"{monday.strftime('%m/%d')}~{friday.strftime('%m/%d')}"
     return f"{target_month}월 {week_num}주차 ({date_range})"
 
 
 # ==========================================
-# 3. 메인 탭 구성
+# 3. 메인 탭 구성 (경영지원부 요청용 Tab 6 신설)
 # ==========================================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
         "📈 완제품 재고 현황",
         "📋 실시간 생산일지",
         "📦 부품/재고 마스터",
         "🔄 부품 수불 관제 (Flow)",
         "📅 주간/월간 통합 리포트",
+        "🏛️ 경영지원부 월별 재고현황",
     ]
 )
 
@@ -611,7 +612,7 @@ with tab5:
                     if not df_d.empty and "작업일시" in df_d.columns:
                         df_d["기간그룹"] = df_d["작업일시"].dt.strftime("%Y년 %m월")
 
-                # 공정 중복 제거 기준 생산 집계
+                # 공정 중복 제거 기준 생산 집계 (기존 정확한 중복 제거 방식 100% 보존)
                 if lot_col_p:
                     df_p_unique = df_p.groupby(["기간그룹", lot_col_p, "품목코드"])[qty_col_p].max().reset_index()
                 else:
@@ -726,3 +727,68 @@ with tab5:
 
         except Exception as e:
             st.error(f"주간/월간 분석 리포트 생성 중 오류가 발생했습니다: {e}")
+
+
+# ------------------------------------------
+# [Tab 6] 경영지원부 제출용 월별 재고현황 (신설)
+# ------------------------------------------
+with tab6:
+    st.subheader("🏛️ 경영지원부 제출용 월별 말일 기준 재고현황")
+    st.caption("특정 시점(예: 26.06.30 기준)의 완제품 및 부품/자재 재고 스냅샷을 조회하고 내보냅니다.")
+
+    with st.spinner("구글 시트의 [월별재고] 데이터를 확인하고 있습니다..."):
+        try:
+            # 구글 시트에 "월별재고" 탭이 존재한다고 가정하여 읽어옵니다.
+            df_monthly = load_sheet_data("월별재고")
+
+            if df_monthly.empty:
+                st.info("💡 구글 시트에 **'월별재고'** 탭을 추가하거나 매월 말일 기준 데이터를 기록해 주세요.")
+                st.markdown("""
+                **구글 시트 '월별재고' 탭 표준 구조 예시:**
+                | 기준연월 | 구분 | 품목코드 | 품목명 | 수량 | 단위 | 비고 |
+                | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+                | 2026-06 | 완제품 | FP-001 | 멸균지 포장재 A | 15,000 | EA | 6/30 마감 |
+                | 2026-06 | 부품 | RM-002 | 파우치 필름 B | 3,200 | M | 6/30 마감 |
+                """)
+            else:
+                # 1. 기준연월 필터
+                month_cols = [c for c in df_monthly.columns if "연월" in c or "기준" in c or "월" in c]
+                month_col = month_cols[0] if month_cols else df_monthly.columns[0]
+
+                available_months = sorted(df_monthly[month_col].astype(str).unique(), reverse=True)
+                
+                f_col1, f_col2 = st.columns([1, 2])
+                with f_col1:
+                    selected_month = st.selectbox("📅 기준연월 선택", available_months)
+                
+                with f_col2:
+                    category_col = [c for c in df_monthly.columns if "구분" in c or "분류" in c]
+                    if category_col:
+                        categories = ["전체"] + list(df_monthly[category_col[0]].unique())
+                        selected_cat = st.radio("구분 필터", categories, horizontal=True)
+                    else:
+                        selected_cat = "전체"
+
+                # 2. 데이터 필터링
+                filtered_df = df_monthly[df_monthly[month_col].astype(str) == selected_month]
+                if selected_cat != "전체" and category_col:
+                    filtered_df = filtered_df[filtered_df[category_col[0]] == selected_cat]
+
+                st.divider()
+
+                # 3. 데이터 표시 및 다운로드
+                st.markdown(f"##### 📋 {selected_month} 마감 재고 리스트")
+                st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+
+                # 경영지원부 제출용 CSV 내보내기 버튼
+                csv_data = filtered_df.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    label=f"📥 {selected_month} 기준 재고현황 CSV 다운로드 (경영지원부 제출용)",
+                    data=csv_data,
+                    file_name=f"재고현황_{selected_month}.csv",
+                    mime="text/csv",
+                    type="primary"
+                )
+
+        except Exception as e:
+            st.error(f"월별 재고현황 불러오기 오류: {e}")
