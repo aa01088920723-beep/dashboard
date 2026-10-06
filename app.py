@@ -786,4 +786,58 @@ with tab6:
                 fg_in_summary = df_in_filtered.groupby(c_item)[c_qty].sum().reset_index()
                 fg_in_summary.columns = ["완제품명", "총 입고수량"]
 
-                # 출고 수
+                # 출고 수량 집계
+                fg_out_summary = pd.DataFrame(columns=["완제품명", "총 출하수량"])
+                if not df_fg_out.empty:
+                    out_item_col = [c for c in df_fg_out.columns if "제품" in c or "품목" in c]
+                    out_qty_col = [c for c in df_fg_out.columns if "출고수량" in c or "수량" in c]
+                    co_item = out_item_col[0] if out_item_col else df_fg_out.columns[1]
+                    co_qty = out_qty_col[0] if out_qty_col else df_fg_out.columns[3]
+
+                    df_fg_out[co_qty] = pd.to_numeric(df_fg_out[co_qty].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
+                    fg_out_summary = df_fg_out.groupby(co_item)[co_qty].sum().reset_index()
+                    fg_out_summary.columns = ["완제품명", "총 출하수량"]
+
+                # 완제품 최종 재고 계산
+                fg_merged = pd.merge(fg_in_summary, fg_out_summary, on="완제품명", how="left").fillna(0)
+                fg_merged["현재 완제품 재고량"] = fg_merged["총 입고수량"] - fg_merged["총 출하수량"]
+
+                # 포맷 적용
+                fg_display = fg_merged.copy()
+                fg_display["총 입고수량"] = fg_display["총 입고수량"].map("{:,.0f}".format)
+                fg_display["총 출하수량"] = fg_display["총 출하수량"].map("{:,.0f}".format)
+                fg_display["현재 완제품 재고량"] = fg_display["현재 완제품 재고량"].map("{:,.0f}".format)
+
+                st.dataframe(fg_display, use_container_width=True, hide_index=True)
+
+                csv_fg = fg_merged.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    label=f"📥 {selected_month} 완제품 재고현황 CSV 다운로드",
+                    data=csv_fg,
+                    file_name=f"완제품_재고현황_{selected_month}.csv",
+                    mime="text/csv",
+                    key="dl_fg_csv"
+                )
+            else:
+                st.info("완제품 입출고 데이터를 확인하는 중입니다.")
+
+            st.divider()
+
+            # 3. 부품 재고현황 출력
+            st.markdown(f"#### 📦 2. 부품/자재 재고현황 ({selected_month} 기준)")
+            if not df_parts.empty:
+                st.dataframe(df_parts, use_container_width=True, hide_index=True)
+
+                csv_parts = df_parts.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    label=f"📥 {selected_month} 부품 재고현황 CSV 다운로드",
+                    data=csv_parts,
+                    file_name=f"부품_재고현황_{selected_month}.csv",
+                    mime="text/csv",
+                    key="dl_parts_csv"
+                )
+            else:
+                st.info("부품 마스터 재고 데이터를 불러오는 중입니다.")
+
+        except Exception as e:
+            st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")
