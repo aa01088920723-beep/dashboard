@@ -42,16 +42,19 @@ st.markdown(
 st.title("🏭 스마트 제조 & 재고 통합 관제 대시보드")
 st.caption("Real-time Manufacturing & Inventory Intelligence Dashboard")
 
+# 생산/부품 마스터용 문서 ID
 DOCUMENT_ID = "1cJEuRJ8Sbgb-PF0-xta0j7J2MqoYlATWXRk907DZPnc"
+# 완제품 재고 전용 문서 ID
+FINISHED_GOODS_DOC_ID = "1wUFDAk6iutu2433iLxqF5PEVinxZsjXBQ5twqPmwtg0"
 
 
 # ==========================================
 # 2. 데이터 로드 및 날짜 정제 유틸리티 함수
 # ==========================================
 @st.cache_data(ttl=5)
-def load_sheet_data(sheet_name: str) -> pd.DataFrame:
+def load_sheet_data(sheet_name: str, doc_id: str = DOCUMENT_ID) -> pd.DataFrame:
     encoded_name = urllib.parse.quote(sheet_name)
-    url = f"https://docs.google.com/spreadsheets/d/{DOCUMENT_ID}/gviz/tq?tqx=out:csv&sheet={encoded_name}"
+    url = f"https://docs.google.com/spreadsheets/d/{doc_id}/gviz/tq?tqx=out:csv&sheet={encoded_name}"
     try:
         df = pd.read_csv(url, encoding="utf-8")
         df = df.dropna(how="all").dropna(axis=1, how="all")
@@ -567,7 +570,7 @@ with tab5:
                         item_col_d = c
 
             if df_p.empty or not date_col_p or not qty_col_p:
-                st.warning("⚠️ 분석할 생산일지 데이터가 존재하지 않거나 일자/수량 항목이 올바르지 않습니다.")
+                st.warning("⚠️️ 분석할 생산일지 데이터가 존재하지 않거나 일자/수량 항목이 올바르지 않습니다.")
             else:
                 # 데이터 전처리 & 한글 날짜 파싱 적용
                 df_p[qty_col_p] = pd.to_numeric(
@@ -730,73 +733,57 @@ with tab5:
 
 
 # ------------------------------------------
-# [Tab 6] 월별 재고현황 (완제품 및 부품재고 다운로드용)
+# [Tab 6] 월별 재고현황 (완제품 및 부품 재고)
 # ------------------------------------------
 with tab6:
     st.subheader("📅 월별 재고현황")
     st.caption("경영지원부 보고용 완제품 재고현황 및 부품/자재 재고현황을 기준월별로 조회 및 내보냅니다.")
 
-    with st.spinner("구글 시트의 [완제품재고] 및 [마스터시트](부품재고) 데이터를 불러오는 중입니다..."):
+    with st.spinner("구글 시트의 [완제품재고 관리] 및 [마스터시트] 데이터를 연동 중입니다..."):
         try:
-            # 1. 시트 데이터 가져오기 (완제품재고 시트 및 부품 마스터시트)
-            df_finished = load_sheet_data("완제품재고")
-            if df_finished.empty:
-                df_finished = load_sheet_data("차주생산목표") # 서브용 시트 fallback
-            
-            df_parts = load_sheet_data("마스터시트")
+            # 1. 완제품 입고/출고 데이터 로드 (완제품 재고 전용 구글 시트에서 가져옴)
+            df_fg_in = load_sheet_data("IN", doc_id=FINISHED_GOODS_DOC_ID)
+            df_fg_out = load_sheet_data("OUT", doc_id=FINISHED_GOODS_DOC_ID)
+            df_parts = load_sheet_data("마스터시트", doc_id=DOCUMENT_ID)
 
-            # 2. 월 선택 필터 구성
-            # 구글 시트 내 날짜/타임스탬프 열을 파악하여 월 목록 생성
+            # 날짜 정제 및 기준월 추출
+            if not df_fg_in.empty and "타임스탬프" in df_fg_in.columns:
+                df_fg_in["작업일시"] = clean_date_series(df_fg_in["타임스탬프"])
+            elif not df_fg_in.empty and len(df_fg_in.columns) > 0:
+                df_fg_in["작업일시"] = clean_date_series(df_fg_in.iloc[:, 0])
+
             available_months = []
-            
-            # 생산일지 또는 재고시트 기준 날짜 추출
-            df_p_tmp = load_sheet_data("생산일지")
-            if not df_p_tmp.empty:
-                date_c = [c for c in df_p_tmp.columns if "일자" in c or "날짜" in c or "타임스탬프" in c]
-                if date_c:
-                    df_p_tmp["DT"] = clean_date_series(df_p_tmp[date_c[0]])
-                    available_months = sorted(df_p_tmp["DT"].dt.strftime("%Y-%m").dropna().unique(), reverse=True)
+            if "작업일시" in df_fg_in.columns:
+                available_months = sorted(df_fg_in["작업일시"].dt.strftime("%Y-%m").dropna().unique(), reverse=True)
 
             if not available_months:
                 available_months = ["2026-09", "2026-08", "2026-07", "2026-06"]
 
-            selected_month = st.selectbox("📅 기준월 선택 (예: 2026-06)", available_months, key="monthly_stock_month")
+            selected_month = st.selectbox("📅 기준월 선택 (예: 2026-09)", available_months, key="tab6_month_select")
 
             st.divider()
 
-            # 3. 완제품 재고현황 섹션
+            # 2. 완제품 재고현황 계산 & 출력
             st.markdown(f"#### 📈 1. 완제품 재고현황 ({selected_month} 기준)")
-            if not df_finished.empty:
-                st.dataframe(df_finished, use_container_width=True, hide_index=True)
+            
+            if not df_fg_in.empty:
+                # 입고 수량 집계
+                in_item_col = [c for c in df_fg_in.columns if "제품" in c or "품목" in c]
+                in_qty_col = [c for c in df_fg_in.columns if "입고수량" in c or "수량" in c]
                 
-                csv_finished = df_finished.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    label=f"📥 {selected_month} 완제품 재고현황 CSV 다운로드",
-                    data=csv_finished,
-                    file_name=f"완제품_재고현황_{selected_month}.csv",
-                    mime="text/csv",
-                    key="dl_finished_csv"
-                )
-            else:
-                st.info("완제품 재고 데이터를 불러오는 중입니다.")
+                c_item = in_item_col[0] if in_item_col else df_fg_in.columns[1]
+                c_qty = in_qty_col[0] if in_qty_col else df_fg_in.columns[3]
 
-            st.divider()
+                df_fg_in[c_qty] = pd.to_numeric(df_fg_in[c_qty].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
+                
+                # 선택월까지 누적 입고
+                if "작업일시" in df_fg_in.columns:
+                    filter_date = pd.to_datetime(f"{selected_month}-31", errors="coerce")
+                    df_in_filtered = df_fg_in[df_fg_in["작업일시"] <= filter_date]
+                else:
+                    df_in_filtered = df_fg_in
 
-            # 4. 부품 재고현황 섹션
-            st.markdown(f"#### 📦 2. 부품/자재 재고현황 ({selected_month} 기준)")
-            if not df_parts.empty:
-                st.dataframe(df_parts, use_container_width=True, hide_index=True)
+                fg_in_summary = df_in_filtered.groupby(c_item)[c_qty].sum().reset_index()
+                fg_in_summary.columns = ["완제품명", "총 입고수량"]
 
-                csv_parts = df_parts.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    label=f"📥 {selected_month} 부품 재고현황 CSV 다운로드",
-                    data=csv_parts,
-                    file_name=f"부품_재고현황_{selected_month}.csv",
-                    mime="text/csv",
-                    key="dl_parts_csv"
-                )
-            else:
-                st.info("부품 마스터 재고 데이터를 불러오는 중입니다.")
-
-        except Exception as e:
-            st.error(f"월별 재고현황을 생성하는 중 오류가 발생했습니다: {e}")
+                # 출고 수
