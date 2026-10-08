@@ -159,7 +159,6 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
-# ------------------------------------------
 # [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황
 # ------------------------------------------
 with tab_goal:
@@ -209,12 +208,12 @@ with tab_goal:
     st.divider()
 
     # ==========================================
-    # ❌ [주간 생산목표 삭제 기능] (tab_goal 안쪽에 위치)
+    # ❌ 1. 주간 생산목표 데이터 삭제 기능
     # ==========================================
     with st.expander("❌ 주간 생산목표 데이터 삭제"):
         if not df_goals.empty:
             goal_options = {
-                f"[{row['id']}] {row.get('week_label', '')} | {row.get('item_name', '')} | 수량: {row.get('actual_qty', 0)}EA": row['id']
+                f"[{row['id']}] {row.get('week_label', '')} | {row.get('item_name', '')} | 실적: {row.get('actual_qty', 0)}EA | 비고: {row.get('status_note', '')}": row['id']
                 for _, row in df_goals.iterrows()
             }
             
@@ -222,7 +221,6 @@ with tab_goal:
             target_goal_id = goal_options[selected_goal_label]
             
             if st.button("선택 항목 삭제", type="primary", key="btn_del_goal_action"):
-                # DB에서 해당 ID 레코드 삭제
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM production_goals WHERE id = ?", (target_goal_id,))
@@ -233,6 +231,38 @@ with tab_goal:
                 st.rerun()
         else:
             st.write("삭제할 생산목표 데이터가 없습니다.")
+
+    st.divider()
+
+    # ==========================================
+    # ➕ 2. 새 주간 생산목표 및 실적 입력 폼 (생산일정 입력칸)
+    # ==========================================
+    with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
+        with st.form("new_goal_form", clear_on_submit=True):
+            g_col1, g_col2 = st.columns(2)
+            with g_col1:
+                g_week = st.text_input("주차 (예: 10월 2주 (10.12 ~ 10.16))")
+                g_item = st.text_input("품목명 (예: BC05)")
+                g_target = st.number_input("생산목표 수량 (EA)", min_value=0, step=10)
+            with g_col2:
+                g_actual = st.number_input("실제 생산 수량 (EA)", min_value=0, step=10)
+                g_note = st.text_input("비고 / 상태 (예: 생산완료 멸균미진행)", value="")
+            
+            submit_g = st.form_submit_button("💾 주간 생산목표 저장하기", use_container_width=True)
+            if submit_g:
+                if g_week and g_item:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "INSERT INTO production_goals (week_label, item_name, target_qty, actual_qty, status_note) VALUES (?, ?, ?, ?, ?)",
+                        (g_week, g_item, g_target, g_actual, g_note)
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success("새 주간 생산목표가 성공적으로 저장되었습니다!")
+                    st.rerun()
+                else:
+                    st.warning("주차 및 품목명을 입력해 주세요.")
 
 
 # ------------------------------------------
@@ -278,7 +308,7 @@ with tab_issue:
     st.divider()
 
     # ==========================================
-    # ❌ [특이사항 데이터 삭제 기능] (tab_issue 안쪽에 위치)
+    # ❌ 1. 특이사항 데이터 삭제 기능
     # ==========================================
     with st.expander("❌ 등록된 특이사항 데이터 삭제"):
         if not df_issues.empty:
@@ -291,7 +321,6 @@ with tab_issue:
             target_issue_id = issue_options[selected_issue_label]
             
             if st.button("선택 특이사항 삭제", type="primary", key="btn_del_issue_action"):
-                # DB에서 해당 ID 레코드 삭제
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM issue_events WHERE id = ?", (target_issue_id,))
@@ -305,6 +334,9 @@ with tab_issue:
 
     st.divider()
 
+    # ==========================================
+    # ➕ 2. 새 특이사항 및 주요 이벤트 등록 폼
+    # ==========================================
     with st.expander("➕ 새 특이사항 및 주요 이벤트 등록", expanded=df_issues.empty):
         with st.form("new_issue_form", clear_on_submit=True):
             i_col1, i_col2 = st.columns(2)
@@ -322,10 +354,10 @@ with tab_issue:
                 if i_event:
                     conn = get_db_connection()
                     cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO issue_events (category, event_name, progress, action_plan, due_date, status)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (i_category, i_event, i_progress, i_plan, i_due, i_status))
+                    cursor.execute(
+                        "INSERT INTO issue_events (category, event_name, progress, action_plan, due_date, status) VALUES (?, ?, ?, ?, ?, ?)",
+                        (i_category, i_event, i_progress, i_plan, i_due, i_status)
+                    )
                     conn.commit()
                     conn.close()
                     st.success("새 특이사항이 저장되었습니다!")
