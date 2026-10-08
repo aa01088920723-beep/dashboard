@@ -159,8 +159,6 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
-# ------------------------------------------
-# ------------------------------------------
 # [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황
 # ------------------------------------------
 with tab_goal:
@@ -258,7 +256,21 @@ with tab_goal:
                     cursor.execute("""
                         INSERT INTO production_goals (week_label, item_name, target_qty, actual_qty, status_note)
                         VALUES (?, ?, ?, ?, ?)
-                    """, (g_week, g
+                    """, (g_week, g_item, g_target, g_actual, g_note))
+                    conn.commit()
+                    conn.close()
+                    st.success("새 주간 생산목표가 성공적으로 저장되었습니다!")
+                    st.rerun()
+                else:
+                    st.warning("주차 및 품목명을 입력해 주세요.")
+
+
+# ------------------------------------------
+# [신규 추가 탭 2] 특이사항 및 주요 이벤트
+# ------------------------------------------
+with tab_issue:
+    st.subheader("🚨 특이사항 및 주요 이벤트 관제")
+    st.caption("부품, GMP, 설비 등 업무 특이사항과 진행상황
 # ------------------------------------------
 # [Tab 1] 완제품 재고 현황
 # ------------------------------------------
