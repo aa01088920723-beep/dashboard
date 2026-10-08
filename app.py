@@ -207,70 +207,34 @@ with tab_goal:
 
     st.divider()
 # ==========================================
-# 🗑️ 주간 생산목표 전용 삭제 창 (주간생산목표 탭 안쪽에만 위치)
+# ❌ 주간 생산목표 직접 입력 데이터 삭제 기능
 # ==========================================
 with st.expander("❌ 주간 생산목표 데이터 삭제"):
+    # 세션이나 현재 데이터프레임 변수명 확인 (보통 st.session_state에 저장되어 있을 확률이 높습니다)
+    # 예시로 df_goals 기준 코드입니다.
     if 'df_goals' in locals() and not df_goals.empty:
-        # 1. key 값을 고유하게 지정하여 버튼/선택창 꼬임 방지
-        delete_options = [
-            f"[{i}] {row.get('week_label', '')} | {row.get('item_name', '')} | {row.get('actual_qty', '')}EA"
+        
+        # 1. 삭제할 항목 선택 목록 만들기
+        delete_options = {
+            f"[{i}] {row.get('week_label', '')} | {row.get('item_name', '')} | 수량: {row.get('actual_qty', '')}EA": i
             for i, row in df_goals.iterrows()
-        ]
+        }
         
-        selected_option = st.selectbox(
-            "삭제할 항목 선택", 
-            delete_options, 
-            key="selectbox_goal_delete"
-        )
+        selected_label = st.selectbox("삭제할 항목 선택", list(delete_options.keys()), key="del_goal_selectbox")
+        target_idx = delete_options[selected_label]
         
-        if st.button("선택 항목 삭제", type="primary", key="btn_goal_delete"):
-            # 2. 선택된 행 인덱스 가져오기
-            target_idx = int(selected_option.split("]")[0].replace("[", ""))
-            
-            # 3. 데이터프레임에서 행 삭제
+        if st.button("선택 항목 삭제", type="primary", key="btn_del_goal_action"):
+            # 2. 데이터프레임에서 해당 행 제거 후 인덱스 재정렬
             df_goals = df_goals.drop(target_idx).reset_index(drop=True)
             
-            # 4. 🔥 구글 시트 원본 덮어쓰기 저장!
-            # (app.py 상단에 선언된 생산목표 구글 시트 저장 함수 이름을 넣으셔야 합니다)
-            if 'save_goals' in globals():
-                save_goals(df_goals)
-            elif 'save_weekly_goals' in globals():
-                save_weekly_goals(df_goals)
-            # 만약 구글 시트 Worksheet 객체(예: ws_goals)를 직접 쓰고 계신다면:
-            # ws_goals.clear()
-            # ws_goals.update([df_goals.columns.values.tolist()] + df_goals.values.tolist())
+            # 3. 만약 데이터를 st.session_state에 저장해서 관리하고 계신다면, 세션도 같이 갱신해줍니다!
+            if 'df_goals' in st.session_state:
+                st.session_state.df_goals = df_goals
             
-            st.success("데이터가 완전히 삭제되었습니다!")
+            st.success("항목이 성공적으로 삭제되었습니다!")
             st.rerun()
     else:
-        st.write("삭제할 생산목표 데이터가 없습니다.")
-
-    with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
-        with st.form("new_goal_form", clear_on_submit=True):
-            g_col1, g_col2 = st.columns(2)
-            with g_col1:
-                g_week = st.text_input("주차 레이블", value="10월 1주 (10.06 ~ 10.08)")
-                g_item = st.text_input("품목명", placeholder="예: BC05, MP03, FIX5550-18")
-                g_target = st.number_input("생산목표 수량 (EA)", min_value=0, value=120)
-            with g_col2:
-                g_actual = st.number_input("실제 생산 수량 (EA)", min_value=0, value=120)
-                g_note = st.text_area("비고 / 진행상태", placeholder="예: 생산만 완료함 / 멸균출고 완료")
-            
-            submit_g = st.form_submit_button("💾 목표 저장하기", use_container_width=True)
-            if submit_g:
-                if g_week and g_item:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO production_goals (week_label, item_name, target_qty, actual_qty, status_note)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (g_week, g_item, g_target, g_actual, g_note))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"'{g_item}' 주간 목표 및 생산 실적이 저장되었습니다!")
-                    st.rerun()
-                else:
-                    st.warning("주차와 품목명을 입력해 주세요.")
+        st.write("삭제할 데이터가 없습니다.")
 
 
 # ------------------------------------------
