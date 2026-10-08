@@ -206,6 +206,33 @@ with tab_goal:
         st.info("💡 등록된 주간 생산목표가 없습니다. 아래 입력 폼에서 새 주차 생산 목표를 입력해 주세요.")
 
     st.divider()
+    # ==========================================
+# 🗑️ 등록된 주간 생산목표 삭제 기능
+# ==========================================
+with st.expander("❌ 주간 생산목표 데이터 삭제"):
+    if 'df_goals' in locals() and not df_goals.empty:
+        # 삭제할 항목 선택 목록 생성
+        delete_options = [
+            f"[{i}] {row.get('week_label', '')} | {row.get('item_name', '')} | 수량: {row.get('actual_qty', '')} | 비고: {row.get('status_note', '')}"
+            for i, row in df_goals.iterrows()
+        ]
+        
+        selected_target = st.selectbox("삭제할 생산목표 항목 선택", delete_options)
+        
+        if st.button("선택 항목 삭제", type="primary"):
+            # 선택한 행의 인덱스 추출
+            target_idx = int(selected_target.split("]")[0].replace("[", ""))
+            
+            # 데이터프레임에서 제거
+            df_goals = df_goals.drop(target_idx).reset_index(drop=True)
+            
+            # 구글 시트 저장 함수 호출 (기존에 쓰시는 저장 함수명으로 맞추어 연결)
+            # save_goals(df_goals) 
+            
+            st.success("해당 항목이 삭제되었습니다!")
+            st.rerun()
+    else:
+        st.write("삭제할 생산목표 데이터가 없습니다.")
 
     with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
         with st.form("new_goal_form", clear_on_submit=True):
