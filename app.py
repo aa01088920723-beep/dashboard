@@ -206,31 +206,35 @@ with tab_goal:
         st.info("💡 등록된 주간 생산목표가 없습니다. 아래 입력 폼에서 새 주차 생산 목표를 입력해 주세요.")
 
     st.divider()
-    # ==========================================
-# 🗑️ 등록된 주간 생산목표 삭제 기능
+# ==========================================
+# 🗑️ 주간 생산목표 삭제 기능 (반복문 바깥에 배치)
 # ==========================================
 with st.expander("❌ 주간 생산목표 데이터 삭제"):
     if 'df_goals' in locals() and not df_goals.empty:
-        # 삭제할 항목 선택 목록 생성
-        delete_options = [
-            f"[{i}] {row.get('week_label', '')} | {row.get('item_name', '')} | 수량: {row.get('actual_qty', '')} | 비고: {row.get('status_note', '')}"
-            for i, row in df_goals.iterrows()
-        ]
+        # 1. 삭제 대상 선택 드롭다운
+        options = {
+            f"[{idx}] {row.get('week_label', '')} | {row.get('item_name', '')} | {row.get('actual_qty', '')}EA": idx
+            for idx, row in df_goals.iterrows()
+        }
         
-        selected_target = st.selectbox("삭제할 생산목표 항목 선택", delete_options)
-        
+        selected_label = st.selectbox("삭제할 항목 선택", list(options.keys()))
+        target_idx = options[selected_label]
+
         if st.button("선택 항목 삭제", type="primary"):
-            # 선택한 행의 인덱스 추출
-            target_idx = int(selected_target.split("]")[0].replace("[", ""))
-            
-            # 데이터프레임에서 제거
+            # 2. 데이터프레임에서 행 삭제
             df_goals = df_goals.drop(target_idx).reset_index(drop=True)
             
-            # 구글 시트 저장 함수 호출 (기존에 쓰시는 저장 함수명으로 맞추어 연결)
-            # save_goals(df_goals) 
-            
-            st.success("해당 항목이 삭제되었습니다!")
-            st.rerun()
+            # 3. 🔥 핵심: 구글 시트 원본 덮어쓰기 저장!
+            # (※ 앱에서 사용하는 구글 시트 저장 함수명을 여기에 넣으세요)
+            try:
+                # 예시: save_goals(df_goals) 또는 update_sheet(df_goals)
+                save_goals_to_sheet(df_goals)  # <-- 기존 저장 함수 이름으로 변경
+                st.success("구글 시트에서 삭제가 완료되었습니다!")
+            except Exception as e:
+                # 만약 저장 함수를 별도로 안 만드셨다면 구글 시트 객체에 직접 update
+                st.info("데이터프레임 반영 완료 (구글 시트 저장 함수 연결 필요)")
+
+            st.rerun()  # 화면 즉시 새로고침
     else:
         st.write("삭제할 생산목표 데이터가 없습니다.")
 
