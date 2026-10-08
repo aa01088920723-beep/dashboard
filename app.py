@@ -1,5 +1,6 @@
 import math
 import re
+import time  # 👈 추가됨: 구글 시트 동기화 대기용
 import urllib.parse
 import json
 import requests
@@ -149,10 +150,9 @@ with tab_goal:
     # ==========================================
     with st.expander("❌ 주간 생산목표 데이터 삭제"):
         if not df_goals.empty and "week_label" in df_goals.columns:
-            # 구글 시트 행 번호(2행부터 시작) 계산
             goal_options = {}
             for idx, row in df_goals.iterrows():
-                row_number = idx + 2  # 헤더가 1행이므로 +2
+                row_number = idx + 2
                 label = f"[{row_number}행] {row.get('week_label', '')} | {row.get('item_name', '')} | 실적: {row.get('actual_qty', 0)}EA | 비고: {row.get('status_note', '')}"
                 goal_options[label] = row_number
 
@@ -165,8 +165,9 @@ with tab_goal:
                     "row_index": target_row_index
                 }
                 if send_to_google_sheet(payload):
-                    st.success("해당 생산목표가 성공적으로 삭제되었습니다!")
+                    st.success("해당 생산목표가 삭제되었습니다. 동기화 중입니다...")
                     st.cache_data.clear()
+                    time.sleep(1.5)  # 👈 구글 시트 대기시간 확보
                     st.rerun()
         else:
             st.write("삭제할 생산목표 데이터가 없습니다.")
@@ -200,117 +201,12 @@ with tab_goal:
                         "status_note": g_note.strip(),
                     }
                     if send_to_google_sheet(payload):
-                        st.success("구글 시트에 성공적으로 저장되었습니다!")
+                        st.success("구글 시트에 성공적으로 저장되었습니다! 데이터를 불러오는 중입니다...")
                         st.cache_data.clear()
+                        time.sleep(1.5)  # 👈 구글 시트 저장 반영 대기시간 확보
                         st.rerun()
                 else:
                     st.warning("주차 및 품목명을 입력해 주세요.")
-
-
-# ------------------------------------------
-# [탭 2] 특이사항 및 주요 이벤트
-# ------------------------------------------
-with tab_issue:
-    st.subheader("🚨 특이사항 및 주요 이벤트 관제")
-    st.caption("부품, GMP, 설비 등 업무 특이사항과 진행상황, 조치 계획을 등록·관리합니다.")
-
-    df_issues = load_sheet_data("특이사항", FINISHED_GOODS_DOC_ID)
-
-    if not df_issues.empty and "category" in df_issues.columns:
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            cats = df_issues["category"].dropna().unique().tolist()
-            sel_cat = st.multiselect("구분 필터", options=cats, default=cats)
-        with col_f2:
-            statuses = df_issues["status"].dropna().unique().tolist() if "status" in df_issues.columns else []
-            sel_status = st.multiselect("상태 필터", options=statuses, default=statuses)
-
-        filtered_issues = df_issues[
-            (df_issues["category"].isin(sel_cat)) & 
-            (df_issues["status"].isin(sel_status) if "status" in df_issues.columns else True)
-        ]
-
-        st.dataframe(
-            filtered_issues,
-            column_config={
-                "category": "구분",
-                "event_name": "이벤트",
-                "progress": "진행상황",
-                "action_plan": "향후 조치 계획",
-                "due_date": "완료기한(Due Date)",
-                "status": "상태",
-                "created_at": "등록일시",
-            },
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("💡 등록된 특이사항 데이터가 없습니다. 아래 입력 폼에서 등록해 주세요.")
-
-    st.divider()
-
-    # ==========================================
-    # ❌ 1. 특이사항 데이터 삭제 기능 (구글 시트 연동)
-    # ==========================================
-    with st.expander("❌ 등록된 특이사항 데이터 삭제"):
-        if not df_issues.empty and "category" in df_issues.columns:
-            issue_options = {}
-            for idx, row in df_issues.iterrows():
-                row_number = idx + 2
-                label = f"[{row_number}행] [{row.get('category', '')}] {row.get('event_name', '')} ({row.get('status', '')})"
-                issue_options[label] = row_number
-
-            selected_issue_label = st.selectbox("삭제할 특이사항 항목 선택", list(issue_options.keys()), key="del_issue_selectbox")
-            target_issue_row = issue_options[selected_issue_label]
-
-            if st.button("선택 특이사항 삭제", type="primary", key="btn_del_issue_action"):
-                payload = {
-                    "action": "delete_issue",
-                    "row_index": target_issue_row
-                }
-                if send_to_google_sheet(payload):
-                    st.success("해당 특이사항이 성공적으로 삭제되었습니다!")
-                    st.cache_data.clear()
-                    st.rerun()
-        else:
-            st.write("삭제할 특이사항 데이터가 없습니다.")
-
-    st.divider()
-
-    # ==========================================
-    # ➕ 2. 새 특이사항 및 주요 이벤트 등록 폼
-    # ==========================================
-    with st.expander("➕ 새 특이사항 및 주요 이벤트 등록", expanded=df_issues.empty):
-        with st.form("new_issue_form", clear_on_submit=True):
-            i_col1, i_col2 = st.columns(2)
-            with i_col1:
-                i_category = st.selectbox("구분", ["부품", "GMP", "설비", "품질", "기타"])
-                i_event = st.text_input("이벤트 제목", placeholder="예: 포장지 공급업체 변경건 / DHR 서류 작성")
-                i_progress = st.text_area("진행상황", placeholder="예: 업체 견적문의 완료")
-            with i_col2:
-                i_plan = st.text_area("향후 조치 계획", placeholder="예: 샘플 수령 후 자체 염료테스트 수행")
-                i_due = st.text_input("완료기한 (Due Date)", value="-")
-                i_status = st.selectbox("상태", ["🔄 [진행중]", "✅ [완료]", "⏳ [보류/대기]", "🔍 [검토중]"])
-
-            submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
-
-            if submit_i:
-                if i_event.strip():
-                    payload = {
-                        "action": "add_issue",
-                        "category": i_category,
-                        "event_name": i_event.strip(),
-                        "progress": i_progress,
-                        "action_plan": i_plan,
-                        "due_date": i_due,
-                        "status": i_status,
-                    }
-                    if send_to_google_sheet(payload):
-                        st.success("구글 시트에 성공적으로 저장되었습니다!")
-                        st.cache_data.clear()
-                        st.rerun()
-                else:
-                    st.warning("이벤트 제목을 입력해 주세요.")
 # ------------------------------------------
 # [Tab 1] 완제품 재고 현황
 # ------------------------------------------
