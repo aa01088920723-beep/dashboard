@@ -207,34 +207,41 @@ with tab_goal:
 
     st.divider()
 # ==========================================
-# 🗑️ 주간 생산목표 삭제 기능 (반복문 바깥에 배치)
+# 🗑️ 주간 생산목표 전용 삭제 창 (주간생산목표 탭 안쪽에만 위치)
 # ==========================================
 with st.expander("❌ 주간 생산목표 데이터 삭제"):
     if 'df_goals' in locals() and not df_goals.empty:
-        # 1. 삭제 대상 선택 드롭다운
-        options = {
-            f"[{idx}] {row.get('week_label', '')} | {row.get('item_name', '')} | {row.get('actual_qty', '')}EA": idx
-            for idx, row in df_goals.iterrows()
-        }
+        # 1. key 값을 고유하게 지정하여 버튼/선택창 꼬임 방지
+        delete_options = [
+            f"[{i}] {row.get('week_label', '')} | {row.get('item_name', '')} | {row.get('actual_qty', '')}EA"
+            for i, row in df_goals.iterrows()
+        ]
         
-        selected_label = st.selectbox("삭제할 항목 선택", list(options.keys()))
-        target_idx = options[selected_label]
-
-        if st.button("선택 항목 삭제", type="primary"):
-            # 2. 데이터프레임에서 행 삭제
+        selected_option = st.selectbox(
+            "삭제할 항목 선택", 
+            delete_options, 
+            key="selectbox_goal_delete"
+        )
+        
+        if st.button("선택 항목 삭제", type="primary", key="btn_goal_delete"):
+            # 2. 선택된 행 인덱스 가져오기
+            target_idx = int(selected_option.split("]")[0].replace("[", ""))
+            
+            # 3. 데이터프레임에서 행 삭제
             df_goals = df_goals.drop(target_idx).reset_index(drop=True)
             
-            # 3. 🔥 핵심: 구글 시트 원본 덮어쓰기 저장!
-            # (※ 앱에서 사용하는 구글 시트 저장 함수명을 여기에 넣으세요)
-            try:
-                # 예시: save_goals(df_goals) 또는 update_sheet(df_goals)
-                save_goals_to_sheet(df_goals)  # <-- 기존 저장 함수 이름으로 변경
-                st.success("구글 시트에서 삭제가 완료되었습니다!")
-            except Exception as e:
-                # 만약 저장 함수를 별도로 안 만드셨다면 구글 시트 객체에 직접 update
-                st.info("데이터프레임 반영 완료 (구글 시트 저장 함수 연결 필요)")
-
-            st.rerun()  # 화면 즉시 새로고침
+            # 4. 🔥 구글 시트 원본 덮어쓰기 저장!
+            # (app.py 상단에 선언된 생산목표 구글 시트 저장 함수 이름을 넣으셔야 합니다)
+            if 'save_goals' in globals():
+                save_goals(df_goals)
+            elif 'save_weekly_goals' in globals():
+                save_weekly_goals(df_goals)
+            # 만약 구글 시트 Worksheet 객체(예: ws_goals)를 직접 쓰고 계신다면:
+            # ws_goals.clear()
+            # ws_goals.update([df_goals.columns.values.tolist()] + df_goals.values.tolist())
+            
+            st.success("데이터가 완전히 삭제되었습니다!")
+            st.rerun()
     else:
         st.write("삭제할 생산목표 데이터가 없습니다.")
 
