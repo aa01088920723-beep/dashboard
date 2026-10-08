@@ -1,9 +1,7 @@
 import math
 import re
-import time
 import urllib.parse
-import json
-import requests
+import sqlite3
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -42,23 +40,61 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ==========================================
+# DB 초기화 (주간 생산목표 & 특이사항 저장용)
+# ==========================================
+def init_local_db():
+    conn = sqlite3.connect("production_data.db")
+    cursor = conn.cursor()
+    
+    # 1) 주간 생산목표 테이블
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS production_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            week_label TEXT,
+            item_name TEXT,
+            target_qty INTEGER,
+            actual_qty INTEGER,
+            status_note TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # 2) 특이사항 및 주요 이벤트 테이블
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS issue_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            event_name TEXT,
+            progress TEXT,
+            action_plan TEXT,
+            due_date TEXT,
+            status TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_local_db()
+
+def get_db_connection():
+    return sqlite3.connect("production_data.db")
+
 st.title("🏭 스마트 제조 & 재고 통합 관제 대시보드")
 st.caption("Real-time Manufacturing & Inventory Intelligence Dashboard")
 
 # 생산/부품 마스터용 문서 ID
 DOCUMENT_ID = "1cJEuRJ8Sbgb-PF0-xta0j7J2MqoYlATWXRk907DZPnc"
-# 완제품 재고 및 주간생산목표/특이사항 저장 문서 ID
+# 완제품 재고 전용 문서 ID
 FINISHED_GOODS_DOC_ID = "1wUFDAk6iutu2433iLxqF5PEVinxZsjXBQ5twqPmwtg0"
 
-# 제공받은 Apps Script 웹 앱 URL
-WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzWX0TVR0_ZN9F-ShllRdAuMu3JsxVfxg_M79uYRkXcBaNkeX1ZIFyLSs9yKMmAl2w8/exec"
-
 
 # ==========================================
-# 2. 구글 시트 데이터 읽기 / 쓰기 유틸리티
+# 2. 데이터 로드 및 날짜 정제 유틸리티 함수
 # ==========================================
 @st.cache_data(ttl=5)
-def load_sheet_data(sheet_name: str, doc_id: str = FINISHED_GOODS_DOC_ID) -> pd.DataFrame:
+def load_sheet_data(sheet_name: str, doc_id: str = DOCUMENT_ID) -> pd.DataFrame:
     encoded_name = urllib.parse.quote(sheet_name)
     url = f"https://docs.google.com/spreadsheets/d/{doc_id}/gviz/tq?tqx=out:csv&sheet={encoded_name}"
     try:
@@ -69,14 +105,41 @@ def load_sheet_data(sheet_name: str, doc_id: str = FINISHED_GOODS_DOC_ID) -> pd.
         return pd.DataFrame()
 
 
-def send_to_google_sheet(payload: dict) -> bool:
-    """Google Apps Script Webhook을 통해 구글 시트에 행 추가/삭제"""
-    try:
-        res = requests.post(WEBAPP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=10)
-        return res.status_code == 200
-    except Exception as e:
-        st.error(f"구글 시트 연동 실패: {e}")
-        return False
+def find_numeric_cols(df):
+    return df.select_dtypes(include=[np.number]).columns.tolist()
+
+
+def clean_date_series(series: pd.Series) -> pd.Series:
+    """구글 시트의 다양한 날짜/타임스탬프 한글 형식을 표준 datetime 형태로 안전 변환"""
+    s_clean = series.astype(str).str.strip()
+    s_clean = s_clean.str.replace("오전", "AM").str.replace("오후", "PM")
+    s_clean = s_clean.str.replace(".", "-", regex=False)
+    s_clean = s_clean.str.replace("년", "-").str.replace("월", "-").str.replace("일", "")
+    return pd.to_datetime(s_clean, errors="coerce")
+
+
+def get_korean_week_label(dt: pd.Timestamp) -> str:
+    """
+    수요일이 속한 월을 기준 월로 삼아 N월 M주차 (MM/DD~MM/DD) 형태의 문자열을 반환
+    """
+    if pd.isna(dt):
+        return "미지정"
+
+    monday = dt - pd.Timedelta(days=dt.weekday())  # 월요일 (Mon=0)
+    wednesday = monday + pd.Timedelta(days=2)      # 수요일
+    friday = monday + pd.Timedelta(days=4)          # 금요일
+
+    target_year = wednesday.year
+    target_month = wednesday.month
+
+    first_day_of_month = pd.Timestamp(year=target_year, month=target_month, day=1)
+    days_to_first_wed = (2 - first_day_of_month.weekday()) % 7
+    first_wednesday = first_day_of_month + pd.Timedelta(days=days_to_first_wed)
+
+    week_num = (wednesday.day - first_wednesday.day) // 7 + 1
+
+    date_range = f"{monday.strftime('%m/%d')}~{friday.strftime('%m/%d')}"
+    return f"{target_month}월 {week_num}주차 ({date_range})"
 
 
 # ==========================================
@@ -96,83 +159,84 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
-# [탭 1] 주간 생산목표 별 실제 생산현황
+# [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황
 # ------------------------------------------
 with tab_goal:
     st.subheader("📌 주간 생산목표 별 실제 생산현황")
     st.caption("대시보드에서 직접 이번 주 생산 목표 및 실적 수량을 등록하고 관리합니다.")
 
-    df_goals = load_sheet_data("주간생산목표", FINISHED_GOODS_DOC_ID)
+    conn = get_db_connection()
+    df_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
+    conn.close()
 
-    if not df_goals.empty and "week_label" in df_goals.columns:
-        weeks = df_goals["week_label"].dropna().unique().tolist()
-        if weeks:
-            selected_week = st.selectbox("📅 조회할 주차 선택", options=weeks, index=0)
-            filtered_goals = df_goals[df_goals["week_label"] == selected_week]
-
-            st.markdown(f"##### 📊 {selected_week} 생산 달성률 현황")
-            m_cols = st.columns(min(len(filtered_goals), 4) if len(filtered_goals) > 0 else 1)
-            for idx, (_, row) in enumerate(filtered_goals.iterrows()):
-                with m_cols[idx % 4]:
-                    target = int(row.get("target_qty", 0)) if pd.notna(row.get("target_qty")) else 0
-                    actual = int(row.get("actual_qty", 0)) if pd.notna(row.get("actual_qty")) else 0
-                    rate = round((actual / target * 100), 1) if target > 0 else 0
-                    st.metric(
-                        label=f"{row.get('item_name', '')}",
-                        value=f"{actual:,} EA",
-                        delta=f"목표 {target:,} EA ({rate}% 달성)",
-                    )
-
-            st.divider()
-            st.markdown("##### 📋 생산목표 상세 현황표")
-            show_cols = [c for c in ["week_label", "item_name", "target_qty", "actual_qty", "status_note"] if c in filtered_goals.columns]
-            st.dataframe(
-                filtered_goals[show_cols],
-                column_config={
-                    "week_label": "주차",
-                    "item_name": "품목명",
-                    "target_qty": "생산목표 수량 (EA)",
-                    "actual_qty": "실제 생산 수량 (EA)",
-                    "status_note": "비고 / 상태",
-                },
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("💡 등록된 주간 생산목표 데이터가 없습니다.")
+    if not df_goals.empty:
+        weeks = df_goals["week_label"].unique().tolist()
+        selected_week = st.selectbox("📅 조회할 주차 선택", options=weeks, index=0)
+        
+        filtered_goals = df_goals[df_goals["week_label"] == selected_week]
+        
+        st.markdown(f"##### 📊 {selected_week} 생산 달성률 현황")
+        m_cols = st.columns(min(len(filtered_goals), 4) if len(filtered_goals) > 0 else 1)
+        for idx, (_, row) in enumerate(filtered_goals.iterrows()):
+            with m_cols[idx % 4]:
+                target = row['target_qty']
+                actual = row['actual_qty']
+                rate = round((actual / target * 100), 1) if target > 0 else 0
+                st.metric(
+                    label=f"{row['item_name']}",
+                    value=f"{actual:,} EA",
+                    delta=f"목표 {target:,} EA ({rate}% 달성)"
+                )
+        
+        st.divider()
+        st.markdown("##### 📋 생산목표 상세 현황표")
+        st.dataframe(
+            filtered_goals[["week_label", "item_name", "target_qty", "actual_qty", "status_note"]],
+            column_config={
+                "week_label": "주차",
+                "item_name": "품목명",
+                "target_qty": "생산목표 수량 (EA)",
+                "actual_qty": "실제 생산 수량 (EA)",
+                "status_note": "비고 / 상태"
+            },
+            use_container_width=True,
+            hide_index=True
+        )
     else:
-        st.info("💡 등록된 주간 생산목표 데이터가 없습니다. 아래 입력 폼에서 등록해 주세요.")
+        st.info("💡 등록된 주간 생산목표가 없습니다. 아래 입력 폼에서 새 주차 생산 목표를 입력해 주세요.")
 
     st.divider()
 
-    # 삭제 기능
+    # ==========================================
+    # ❌ 1. 주간 생산목표 데이터 삭제 기능
+    # ==========================================
     with st.expander("❌ 주간 생산목표 데이터 삭제"):
-        if not df_goals.empty and "week_label" in df_goals.columns:
-            goal_options = {}
-            for idx, row in df_goals.iterrows():
-                row_number = idx + 2
-                label = f"[{row_number}행] {row.get('week_label', '')} | {row.get('item_name', '')} | 실적: {row.get('actual_qty', 0)}EA | 비고: {row.get('status_note', '')}"
-                goal_options[label] = row_number
-
+        if not df_goals.empty:
+            goal_options = {
+                f"[{row['id']}] {row.get('week_label', '')} | {row.get('item_name', '')} | 실적: {row.get('actual_qty', 0)}EA | 비고: {row.get('status_note', '')}": row['id']
+                for _, row in df_goals.iterrows()
+            }
+            
             selected_goal_label = st.selectbox("삭제할 생산목표 항목 선택", list(goal_options.keys()), key="del_goal_selectbox")
-            target_row_index = goal_options[selected_goal_label]
-
+            target_goal_id = goal_options[selected_goal_label]
+            
             if st.button("선택 항목 삭제", type="primary", key="btn_del_goal_action"):
-                payload = {
-                    "action": "delete_goal",
-                    "row_index": target_row_index
-                }
-                if send_to_google_sheet(payload):
-                    st.success("해당 생산목표가 삭제되었습니다.")
-                    st.cache_data.clear()
-                    time.sleep(1.5)
-                    st.rerun()
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM production_goals WHERE id = ?", (target_goal_id,))
+                conn.commit()
+                conn.close()
+                
+                st.success("해당 생산목표가 DB에서 성공적으로 삭제되었습니다!")
+                st.rerun()
         else:
             st.write("삭제할 생산목표 데이터가 없습니다.")
 
     st.divider()
 
-    # 입력 폼
+    # ==========================================
+    # ➕ 2. 새 주간 생산목표 및 실적 입력 폼 (생산일정 입력칸)
+    # ==========================================
     with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
         with st.form("new_goal_form", clear_on_submit=True):
             g_col1, g_col2 = st.columns(2)
@@ -183,89 +247,123 @@ with tab_goal:
             with g_col2:
                 g_actual = st.number_input("실제 생산 수량 (EA)", min_value=0, step=10)
                 g_note = st.text_input("비고 / 상태 (예: 생산완료 멸균미진행)", value="")
-
+            
             submit_g = st.form_submit_button("💾 주간 생산목표 저장하기", use_container_width=True)
-
             if submit_g:
-                if g_week.strip() and g_item.strip():
-                    payload = {
-                        "action": "add_goal",
-                        "week_label": g_week.strip(),
-                        "item_name": g_item.strip(),
-                        "target_qty": g_target,
-                        "actual_qty": g_actual,
-                        "status_note": g_note.strip(),
-                    }
-                    if send_to_google_sheet(payload):
-                        st.success("성공적으로 저장되었습니다!")
-                        st.cache_data.clear()
-                        time.sleep(1.5)
-                        st.rerun()
+                if g_week and g_item:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "INSERT INTO production_goals (week_label, item_name, target_qty, actual_qty, status_note) VALUES (?, ?, ?, ?, ?)",
+                        (g_week, g_item, g_target, g_actual, g_note)
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success("새 주간 생산목표가 성공적으로 저장되었습니다!")
+                    st.rerun()
                 else:
                     st.warning("주차 및 품목명을 입력해 주세요.")
 
 
 # ------------------------------------------
-# [탭 2] 특이사항 및 주요 이벤트
+# [신규 추가 탭 2] 특이사항 및 주요 이벤트
 # ------------------------------------------
 with tab_issue:
     st.subheader("🚨 특이사항 및 주요 이벤트 관제")
     st.caption("부품, GMP, 설비 등 업무 특이사항과 진행상황, 조치 계획을 등록·관리합니다.")
 
-    df_issues = load_sheet_data("특이사항", FINISHED_GOODS_DOC_ID)
+    conn = get_db_connection()
+    df_issues = pd.read_sql_query("SELECT * FROM issue_events ORDER BY id DESC", conn)
+    conn.close()
 
-    if not df_issues.empty and "category" in df_issues.columns:
+    if not df_issues.empty:
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            cats = df_issues["category"].dropna().unique().tolist()
-            sel_cat = st.multiselect("구분 필터", options=cats, default=cats)
+            sel_cat = st.multiselect("구분 필터", options=df_issues["category"].unique(), default=df_issues["category"].unique())
         with col_f2:
-            statuses = df_issues["status"].dropna().unique().tolist() if "status" in df_issues.columns else []
-            sel_status = st.multiselect("상태 필터", options=statuses, default=statuses)
+            sel_status = st.multiselect("상태 필터", options=df_issues["status"].unique(), default=df_issues["status"].unique())
 
         filtered_issues = df_issues[
             (df_issues["category"].isin(sel_cat)) & 
-            (df_issues["status"].isin(sel_status) if "status" in df_issues.columns else True)
+            (df_issues["status"].isin(sel_status))
         ]
 
         st.dataframe(
-            filtered_issues,
+            filtered_issues[["id", "category", "event_name", "progress", "action_plan", "due_date", "status"]],
             column_config={
+                "id": "No",
                 "category": "구분",
                 "event_name": "이벤트",
                 "progress": "진행상황",
                 "action_plan": "향후 조치 계획",
                 "due_date": "완료기한(Due Date)",
-                "status": "상태",
-                "created_at": "등록일시",
+                "status": "상태"
             },
             use_container_width=True,
-            hide_index=True,
+            hide_index=True
         )
     else:
-        st.info("💡 등록된 특이사항 데이터가 없습니다.")
+        st.info("💡 등록된 특이사항 데이터가 없습니다. 아래 입력 폼에서 등록해 주세요.")
 
     st.divider()
 
+    # ==========================================
+    # ❌ 1. 특이사항 데이터 삭제 기능
+    # ==========================================
     with st.expander("❌ 등록된 특이사항 데이터 삭제"):
-        if not df_issues.empty and "category" in df_issues.columns:
-            issue_options = {}
-            for idx, row in df_issues.iterrows():
-                row_number = idx + 2
-                label = f"[{row_number}행] [{row.get('category', '')}] {row.get('event_name', '')} ({row.get('status', '')})"
-                issue_options[label] = row_number
-
+        if not df_issues.empty:
+            issue_options = {
+                f"[{row['id']}] [{row.get('category', '')}] {row.get('event_name', '')} ({row.get('status', '')})": row['id']
+                for _, row in df_issues.iterrows()
+            }
+            
             selected_issue_label = st.selectbox("삭제할 특이사항 항목 선택", list(issue_options.keys()), key="del_issue_selectbox")
-            target_issue_row = issue_options[selected_issue_label]
-
+            target_issue_id = issue_options[selected_issue_label]
+            
             if st.button("선택 특이사항 삭제", type="primary", key="btn_del_issue_action"):
-                payload = {
-                    "action": "delete_issue",
-                    "row_index": target_issue_row
-                }
-                if send_to_google_sheet(payload):
-                    st.success("해당 특이사항이 삭제되었습니다.")
-                    st.cache
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM issue_events WHERE id = ?", (target_issue_id,))
+                conn.commit()
+                conn.close()
+                
+                st.success("해당 특이사항이 DB에서 성공적으로 삭제되었습니다!")
+                st.rerun()
+        else:
+            st.write("삭제할 특이사항 데이터가 없습니다.")
+
+    st.divider()
+
+    # ==========================================
+    # ➕ 2. 새 특이사항 및 주요 이벤트 등록 폼
+    # ==========================================
+    with st.expander("➕ 새 특이사항 및 주요 이벤트 등록", expanded=df_issues.empty):
+        with st.form("new_issue_form", clear_on_submit=True):
+            i_col1, i_col2 = st.columns(2)
+            with i_col1:
+                i_category = st.selectbox("구분", ["부품", "GMP", "설비", "품질", "기타"])
+                i_event = st.text_input("이벤트 제목", placeholder="예: 포장지 공급업체 변경건 / DHR 서류 작성")
+                i_progress = st.text_area("진행상황", placeholder="예: 업체 견적문의 완료")
+            with i_col2:
+                i_plan = st.text_area("향후 조치 계획", placeholder="예: 샘플 수령 후 자체 염료테스트 수행")
+                i_due = st.text_input("완료기한 (Due Date)", value="-")
+                i_status = st.selectbox("상태", ["🔄 [진행중]", "✅ [완료]", "⏳ [보류/대기]", "🔍 [검토중]"])
+            
+            submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
+            if submit_i:
+                if i_event:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "INSERT INTO issue_events (category, event_name, progress, action_plan, due_date, status) VALUES (?, ?, ?, ?, ?, ?)",
+                        (i_category, i_event, i_progress, i_plan, i_due, i_status)
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success("새 특이사항이 저장되었습니다!")
+                    st.rerun()
+                else:
+                    st.warning("이벤트 제목을 입력해 주세요.")
 # ------------------------------------------
 # [Tab 1] 완제품 재고 현황
 # ------------------------------------------
