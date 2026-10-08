@@ -49,7 +49,7 @@ DOCUMENT_ID = "1cJEuRJ8Sbgb-PF0-xta0j7J2MqoYlATWXRk907DZPnc"
 # 완제품 재고 및 주간생산목표/특이사항 저장 문서 ID
 FINISHED_GOODS_DOC_ID = "1wUFDAk6iutu2433iLxqF5PEVinxZsjXBQ5twqPmwtg0"
 
-# 발급받으신 Apps Script 웹 앱 URL 적용
+# 제공받은 Apps Script 웹 앱 URL
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzWX0TVR0_ZN9F-ShllRdAuMu3JsxVfxg_M79uYRkXcBaNkeX1ZIFyLSs9yKMmAl2w8/exec"
 
 
@@ -69,12 +69,12 @@ def load_sheet_data(sheet_name: str, doc_id: str = FINISHED_GOODS_DOC_ID) -> pd.
 
 
 def send_to_google_sheet(payload: dict) -> bool:
-    """Google Apps Script Webhook을 통해 구글 시트에 행 추가"""
+    """Google Apps Script Webhook을 통해 구글 시트에 행 추가/삭제"""
     try:
         res = requests.post(WEBAPP_URL, data=json.dumps(payload), headers={"Content-Type": "application/json"}, timeout=10)
         return res.status_code == 200
     except Exception as e:
-        st.error(f"구글 시트 저장 실패: {e}")
+        st.error(f"구글 시트 연동 실패: {e}")
         return False
 
 
@@ -145,7 +145,36 @@ with tab_goal:
     st.divider()
 
     # ==========================================
-    # ➕ 새 주간 생산목표 입력 폼
+    # ❌ 1. 주간 생산목표 데이터 삭제 기능 (구글 시트 연동)
+    # ==========================================
+    with st.expander("❌ 주간 생산목표 데이터 삭제"):
+        if not df_goals.empty and "week_label" in df_goals.columns:
+            # 구글 시트 행 번호(2행부터 시작) 계산
+            goal_options = {}
+            for idx, row in df_goals.iterrows():
+                row_number = idx + 2  # 헤더가 1행이므로 +2
+                label = f"[{row_number}행] {row.get('week_label', '')} | {row.get('item_name', '')} | 실적: {row.get('actual_qty', 0)}EA | 비고: {row.get('status_note', '')}"
+                goal_options[label] = row_number
+
+            selected_goal_label = st.selectbox("삭제할 생산목표 항목 선택", list(goal_options.keys()), key="del_goal_selectbox")
+            target_row_index = goal_options[selected_goal_label]
+
+            if st.button("선택 항목 삭제", type="primary", key="btn_del_goal_action"):
+                payload = {
+                    "action": "delete_goal",
+                    "row_index": target_row_index
+                }
+                if send_to_google_sheet(payload):
+                    st.success("해당 생산목표가 성공적으로 삭제되었습니다!")
+                    st.cache_data.clear()
+                    st.rerun()
+        else:
+            st.write("삭제할 생산목표 데이터가 없습니다.")
+
+    st.divider()
+
+    # ==========================================
+    # ➕ 2. 새 주간 생산목표 및 실적 입력 폼
     # ==========================================
     with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
         with st.form("new_goal_form", clear_on_submit=True):
@@ -171,7 +200,7 @@ with tab_goal:
                         "status_note": g_note.strip(),
                     }
                     if send_to_google_sheet(payload):
-                        st.success("구글 시트에 성공적으로 영구 저장되었습니다!")
+                        st.success("구글 시트에 성공적으로 저장되었습니다!")
                         st.cache_data.clear()
                         st.rerun()
                 else:
@@ -221,7 +250,35 @@ with tab_issue:
     st.divider()
 
     # ==========================================
-    # ➕ 새 특이사항 및 주요 이벤트 등록 폼
+    # ❌ 1. 특이사항 데이터 삭제 기능 (구글 시트 연동)
+    # ==========================================
+    with st.expander("❌ 등록된 특이사항 데이터 삭제"):
+        if not df_issues.empty and "category" in df_issues.columns:
+            issue_options = {}
+            for idx, row in df_issues.iterrows():
+                row_number = idx + 2
+                label = f"[{row_number}행] [{row.get('category', '')}] {row.get('event_name', '')} ({row.get('status', '')})"
+                issue_options[label] = row_number
+
+            selected_issue_label = st.selectbox("삭제할 특이사항 항목 선택", list(issue_options.keys()), key="del_issue_selectbox")
+            target_issue_row = issue_options[selected_issue_label]
+
+            if st.button("선택 특이사항 삭제", type="primary", key="btn_del_issue_action"):
+                payload = {
+                    "action": "delete_issue",
+                    "row_index": target_issue_row
+                }
+                if send_to_google_sheet(payload):
+                    st.success("해당 특이사항이 성공적으로 삭제되었습니다!")
+                    st.cache_data.clear()
+                    st.rerun()
+        else:
+            st.write("삭제할 특이사항 데이터가 없습니다.")
+
+    st.divider()
+
+    # ==========================================
+    # ➕ 2. 새 특이사항 및 주요 이벤트 등록 폼
     # ==========================================
     with st.expander("➕ 새 특이사항 및 주요 이벤트 등록", expanded=df_issues.empty):
         with st.form("new_issue_form", clear_on_submit=True):
@@ -249,7 +306,7 @@ with tab_issue:
                         "status": i_status,
                     }
                     if send_to_google_sheet(payload):
-                        st.success("구글 시트에 성공적으로 영구 저장되었습니다!")
+                        st.success("구글 시트에 성공적으로 저장되었습니다!")
                         st.cache_data.clear()
                         st.rerun()
                 else:
