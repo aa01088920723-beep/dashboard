@@ -159,6 +159,7 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
+# ------------------------------------------
 # [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황
 # ------------------------------------------
 with tab_goal:
@@ -180,7 +181,158 @@ with tab_goal:
         for idx, (_, row) in enumerate(filtered_goals.iterrows()):
             with m_cols[idx % 4]:
                 target = row['target_qty']
-                actual = row
+                actual = row['actual_qty']
+                rate = round((actual / target * 100), 1) if target > 0 else 0
+                st.metric(
+                    label=f"{row['item_name']}",
+                    value=f"{actual:,} EA",
+                    delta=f"목표 {target:,} EA ({rate}% 달성)"
+                )
+        
+        st.divider()
+        st.markdown("##### 📋 생산목표 상세 현황표")
+        st.dataframe(
+            filtered_goals[["week_label", "item_name", "target_qty", "actual_qty", "status_note"]],
+            column_config={
+                "week_label": "주차",
+                "item_name": "품목명",
+                "target_qty": "생산목표 수량 (EA)",
+                "actual_qty": "실제 생산 수량 (EA)",
+                "status_note": "비고 / 상태"
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("💡 등록된 주간 생산목표가 없습니다. 아래 입력 폼에서 새 주차 생산 목표를 입력해 주세요.")
+
+    st.divider()
+
+    # ==========================================
+    # ❌ [주간 생산목표 삭제 기능] (tab_goal 안쪽에 위치)
+    # ==========================================
+    with st.expander("❌ 주간 생산목표 데이터 삭제"):
+        if not df_goals.empty:
+            goal_options = {
+                f"[{row['id']}] {row.get('week_label', '')} | {row.get('item_name', '')} | 수량: {row.get('actual_qty', 0)}EA": row['id']
+                for _, row in df_goals.iterrows()
+            }
+            
+            selected_goal_label = st.selectbox("삭제할 생산목표 항목 선택", list(goal_options.keys()), key="del_goal_selectbox")
+            target_goal_id = goal_options[selected_goal_label]
+            
+            if st.button("선택 항목 삭제", type="primary", key="btn_del_goal_action"):
+                # DB에서 해당 ID 레코드 삭제
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM production_goals WHERE id = ?", (target_goal_id,))
+                conn.commit()
+                conn.close()
+                
+                st.success("해당 생산목표가 DB에서 성공적으로 삭제되었습니다!")
+                st.rerun()
+        else:
+            st.write("삭제할 생산목표 데이터가 없습니다.")
+
+
+# ------------------------------------------
+# [신규 추가 탭 2] 특이사항 및 주요 이벤트
+# ------------------------------------------
+with tab_issue:
+    st.subheader("🚨 특이사항 및 주요 이벤트 관제")
+    st.caption("부품, GMP, 설비 등 업무 특이사항과 진행상황, 조치 계획을 등록·관리합니다.")
+
+    conn = get_db_connection()
+    df_issues = pd.read_sql_query("SELECT * FROM issue_events ORDER BY id DESC", conn)
+    conn.close()
+
+    if not df_issues.empty:
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            sel_cat = st.multiselect("구분 필터", options=df_issues["category"].unique(), default=df_issues["category"].unique())
+        with col_f2:
+            sel_status = st.multiselect("상태 필터", options=df_issues["status"].unique(), default=df_issues["status"].unique())
+
+        filtered_issues = df_issues[
+            (df_issues["category"].isin(sel_cat)) & 
+            (df_issues["status"].isin(sel_status))
+        ]
+
+        st.dataframe(
+            filtered_issues[["id", "category", "event_name", "progress", "action_plan", "due_date", "status"]],
+            column_config={
+                "id": "No",
+                "category": "구분",
+                "event_name": "이벤트",
+                "progress": "진행상황",
+                "action_plan": "향후 조치 계획",
+                "due_date": "완료기한(Due Date)",
+                "status": "상태"
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("💡 등록된 특이사항 데이터가 없습니다. 아래 입력 폼에서 등록해 주세요.")
+
+    st.divider()
+
+    # ==========================================
+    # ❌ [특이사항 데이터 삭제 기능] (tab_issue 안쪽에 위치)
+    # ==========================================
+    with st.expander("❌ 등록된 특이사항 데이터 삭제"):
+        if not df_issues.empty:
+            issue_options = {
+                f"[{row['id']}] [{row.get('category', '')}] {row.get('event_name', '')} ({row.get('status', '')})": row['id']
+                for _, row in df_issues.iterrows()
+            }
+            
+            selected_issue_label = st.selectbox("삭제할 특이사항 항목 선택", list(issue_options.keys()), key="del_issue_selectbox")
+            target_issue_id = issue_options[selected_issue_label]
+            
+            if st.button("선택 특이사항 삭제", type="primary", key="btn_del_issue_action"):
+                # DB에서 해당 ID 레코드 삭제
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM issue_events WHERE id = ?", (target_issue_id,))
+                conn.commit()
+                conn.close()
+                
+                st.success("해당 특이사항이 DB에서 성공적으로 삭제되었습니다!")
+                st.rerun()
+        else:
+            st.write("삭제할 특이사항 데이터가 없습니다.")
+
+    st.divider()
+
+    with st.expander("➕ 새 특이사항 및 주요 이벤트 등록", expanded=df_issues.empty):
+        with st.form("new_issue_form", clear_on_submit=True):
+            i_col1, i_col2 = st.columns(2)
+            with i_col1:
+                i_category = st.selectbox("구분", ["부품", "GMP", "설비", "품질", "기타"])
+                i_event = st.text_input("이벤트 제목", placeholder="예: 포장지 공급업체 변경건 / DHR 서류 작성")
+                i_progress = st.text_area("진행상황", placeholder="예: 업체 견적문의 완료")
+            with i_col2:
+                i_plan = st.text_area("향후 조치 계획", placeholder="예: 샘플 수령 후 자체 염료테스트 수행")
+                i_due = st.text_input("완료기한 (Due Date)", value="-")
+                i_status = st.selectbox("상태", ["🔄 [진행중]", "✅ [완료]", "⏳ [보류/대기]", "🔍 [검토중]"])
+            
+            submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
+            if submit_i:
+                if i_event:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO issue_events (category, event_name, progress, action_plan, due_date, status)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (i_category, i_event, i_progress, i_plan, i_due, i_status))
+                    conn.commit()
+                    conn.close()
+                    st.success("새 특이사항이 저장되었습니다!")
+                    st.rerun()
+                else:
+                    st.warning("이벤트 제목을 입력해 주세요.")
+# ------------------------------------------
 # [Tab 1] 완제품 재고 현황
 # ------------------------------------------
 with tab1:
