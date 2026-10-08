@@ -1,163 +1,3 @@
-import math
-import re
-import urllib.parse
-import sqlite3
-import numpy as np
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import streamlit as st
-
-# ==========================================
-# 1. 페이지 기본 설정 & CSS 커스텀
-# ==========================================
-st.set_page_config(
-    page_title="스마트 공장통합 관제 대시보드",
-    page_icon="🏭",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-st.markdown(
-    """
-    <style>
-    .main { background-color: #f8f9fa; }
-    .metric-card {
-        background-color: #ffffff;
-        border: 1px solid #e9ecef;
-        border-radius: 10px;
-        padding: 15px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
-    }
-    div[data-testid="stMetricValue"] {
-        font-size: 28px;
-        font-weight: 700;
-        color: #1f2937;
-    }
-    </style>
-""",
-    unsafe_allow_html=True,
-)
-
-# ==========================================
-# DB 초기화 (주간 생산목표 & 특이사항 저장용)
-# ==========================================
-def init_local_db():
-    conn = sqlite3.connect("production_data.db")
-    cursor = conn.cursor()
-    
-    # 1) 주간 생산목표 테이블
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS production_goals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            week_label TEXT,
-            item_name TEXT,
-            target_qty INTEGER,
-            actual_qty INTEGER,
-            status_note TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # 2) 특이사항 및 주요 이벤트 테이블
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS issue_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT,
-            event_name TEXT,
-            progress TEXT,
-            action_plan TEXT,
-            due_date TEXT,
-            status TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-init_local_db()
-
-def get_db_connection():
-    return sqlite3.connect("production_data.db")
-
-st.title("🏭 스마트 제조 & 재고 통합 관제 대시보드")
-st.caption("Real-time Manufacturing & Inventory Intelligence Dashboard")
-
-# 생산/부품 마스터용 문서 ID
-DOCUMENT_ID = "1cJEuRJ8Sbgb-PF0-xta0j7J2MqoYlATWXRk907DZPnc"
-# 완제품 재고 전용 문서 ID
-FINISHED_GOODS_DOC_ID = "1wUFDAk6iutu2433iLxqF5PEVinxZsjXBQ5twqPmwtg0"
-
-
-# ==========================================
-# 2. 데이터 로드 및 날짜 정제 유틸리티 함수
-# ==========================================
-@st.cache_data(ttl=5)
-def load_sheet_data(sheet_name: str, doc_id: str = DOCUMENT_ID) -> pd.DataFrame:
-    encoded_name = urllib.parse.quote(sheet_name)
-    url = f"https://docs.google.com/spreadsheets/d/{doc_id}/gviz/tq?tqx=out:csv&sheet={encoded_name}"
-    try:
-        df = pd.read_csv(url, encoding="utf-8")
-        df = df.dropna(how="all").dropna(axis=1, how="all")
-        return df
-    except Exception:
-        return pd.DataFrame()
-
-
-def find_numeric_cols(df):
-    return df.select_dtypes(include=[np.number]).columns.tolist()
-
-
-def clean_date_series(series: pd.Series) -> pd.Series:
-    """구글 시트의 다양한 날짜/타임스탬프 한글 형식을 표준 datetime 형태로 안전 변환"""
-    s_clean = series.astype(str).str.strip()
-    s_clean = s_clean.str.replace("오전", "AM").str.replace("오후", "PM")
-    s_clean = s_clean.str.replace(".", "-", regex=False)
-    s_clean = s_clean.str.replace("년", "-").str.replace("월", "-").str.replace("일", "")
-    return pd.to_datetime(s_clean, errors="coerce")
-
-
-def get_korean_week_label(dt: pd.Timestamp) -> str:
-    """
-    수요일이 속한 월을 기준 월로 삼아 N월 M주차 (MM/DD~MM/DD) 형태의 문자열을 반환
-    """
-    if pd.isna(dt):
-        return "미지정"
-
-    monday = dt - pd.Timedelta(days=dt.weekday())  # 월요일 (Mon=0)
-    wednesday = monday + pd.Timedelta(days=2)      # 수요일
-    friday = monday + pd.Timedelta(days=4)          # 금요일
-
-    target_year = wednesday.year
-    target_month = wednesday.month
-
-    first_day_of_month = pd.Timestamp(year=target_year, month=target_month, day=1)
-    days_to_first_wed = (2 - first_day_of_month.weekday()) % 7
-    first_wednesday = first_day_of_month + pd.Timedelta(days=days_to_first_wed)
-
-    week_num = (wednesday.day - first_wednesday.day) // 7 + 1
-
-    date_range = f"{monday.strftime('%m/%d')}~{friday.strftime('%m/%d')}"
-    return f"{target_month}월 {week_num}주차 ({date_range})"
-
-
-# ==========================================
-# 3. 메인 탭 구성
-# ==========================================
-tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    [
-        "📌 주간 생산목표 관리",
-        "🚨 특이사항 & 주요 이벤트",
-        "📈 완제품 재고 현황",
-        "📋 실시간 생산일지",
-        "📦 부품/재고 마스터",
-        "🔄 부품 수불 관제 (Flow)",
-        "📅 주간/월간 통합 리포트",
-        "📅 월별 재고현황",
-    ]
-)
-
 # ------------------------------------------
 # [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황
 # ------------------------------------------
@@ -165,9 +5,13 @@ with tab_goal:
     st.subheader("📌 주간 생산목표 별 실제 생산현황")
     st.caption("대시보드에서 직접 이번 주 생산 목표 및 실적 수량을 등록하고 관리합니다.")
 
-    conn = get_db_connection()
-    df_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
-    conn.close()
+    try:
+        conn = get_db_connection()
+        df_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
+        conn.close()
+    except Exception as e:
+        df_goals = pd.DataFrame()
+        st.error(f"DB 읽기 오류: {e}")
 
     if not df_goals.empty:
         weeks = df_goals["week_label"].unique().tolist()
@@ -235,7 +79,7 @@ with tab_goal:
     st.divider()
 
     # ==========================================
-    # ➕ 2. 새 주간 생산목표 및 실적 입력 폼 (생산일정 입력칸)
+    # ➕ 2. 새 주간 생산목표 및 실적 입력 폼 (수정 완료)
     # ==========================================
     with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
         with st.form("new_goal_form", clear_on_submit=True):
@@ -249,18 +93,22 @@ with tab_goal:
                 g_note = st.text_input("비고 / 상태 (예: 생산완료 멸균미진행)", value="")
             
             submit_g = st.form_submit_button("💾 주간 생산목표 저장하기", use_container_width=True)
+            
             if submit_g:
-                if g_week and g_item:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "INSERT INTO production_goals (week_label, item_name, target_qty, actual_qty, status_note) VALUES (?, ?, ?, ?, ?)",
-                        (g_week, g_item, g_target, g_actual, g_note)
-                    )
-                    conn.commit()
-                    conn.close()
-                    st.success("새 주간 생산목표가 성공적으로 저장되었습니다!")
-                    st.rerun()
+                if g_week.strip() and g_item.strip():
+                    try:
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "INSERT INTO production_goals (week_label, item_name, target_qty, actual_qty, status_note) VALUES (?, ?, ?, ?, ?)",
+                            (g_week.strip(), g_item.strip(), g_target, g_actual, g_note.strip())
+                        )
+                        conn.commit()
+                        conn.close()
+                        st.success("새 주간 생산목표가 성공적으로 저장되었습니다!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"저장 중 오류가 발생했습니다: {e}")
                 else:
                     st.warning("주차 및 품목명을 입력해 주세요.")
 
@@ -272,9 +120,13 @@ with tab_issue:
     st.subheader("🚨 특이사항 및 주요 이벤트 관제")
     st.caption("부품, GMP, 설비 등 업무 특이사항과 진행상황, 조치 계획을 등록·관리합니다.")
 
-    conn = get_db_connection()
-    df_issues = pd.read_sql_query("SELECT * FROM issue_events ORDER BY id DESC", conn)
-    conn.close()
+    try:
+        conn = get_db_connection()
+        df_issues = pd.read_sql_query("SELECT * FROM issue_events ORDER BY id DESC", conn)
+        conn.close()
+    except Exception as e:
+        df_issues = pd.DataFrame()
+        st.error(f"DB 읽기 오류: {e}")
 
     if not df_issues.empty:
         col_f1, col_f2 = st.columns(2)
@@ -335,7 +187,7 @@ with tab_issue:
     st.divider()
 
     # ==========================================
-    # ➕ 2. 새 특이사항 및 주요 이벤트 등록 폼
+    # ➕ 2. 새 특이사항 및 주요 이벤트 등록 폼 (수정 완료)
     # ==========================================
     with st.expander("➕ 새 특이사항 및 주요 이벤트 등록", expanded=df_issues.empty):
         with st.form("new_issue_form", clear_on_submit=True):
@@ -350,18 +202,23 @@ with tab_issue:
                 i_status = st.selectbox("상태", ["🔄 [진행중]", "✅ [완료]", "⏳ [보류/대기]", "🔍 [검토중]"])
             
             submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
+            
             if submit_i:
-                if i_event:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "INSERT INTO issue_events (category, event_name, progress, action_plan, due_date, status) VALUES (?, ?, ?, ?, ?, ?)",
-                        (i_category, i_event, i_progress, i_plan, i_due, i_status)
-                    )
-                    conn.commit()
-                    conn.close()
-                    st.success("새 특이사항이 저장되었습니다!")
-                    st.rerun()
+                if i_event.strip():
+                    try:
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "INSERT INTO production_goals (category, event_name, progress, action_plan, due_date, status) VALUES (?, ?, ?, ?, ?, ?)" if False else
+                            "INSERT INTO issue_events (category, event_name, progress, action_plan, due_date, status) VALUES (?, ?, ?, ?, ?, ?)",
+                            (i_category, i_event.strip(), i_progress, i_plan, i_due, i_status)
+                        )
+                        conn.commit()
+                        conn.close()
+                        st.success("새 특이사항이 저장되었습니다!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"저장 중 오류가 발생했습니다: {e}")
                 else:
                     st.warning("이벤트 제목을 입력해 주세요.")
 # ------------------------------------------
