@@ -853,5 +853,4 @@ with tab6:
                 st.info("부품 마스터 재고 데이터를 불러오는 중입니다.")
 
         except Exception as e:
-            st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")
-             
+            st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")             
