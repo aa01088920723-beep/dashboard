@@ -1,7 +1,6 @@
 import math
 import re
 import urllib.parse
-import sqlite3
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -39,47 +38,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-# ==========================================
-# DB 초기화 (주간 생산목표 & 특이사항 저장용)
-# ==========================================
-def init_local_db():
-    conn = sqlite3.connect("production_data.db")
-    cursor = conn.cursor()
-    
-    # 1) 주간 생산목표 테이블
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS production_goals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            week_label TEXT,
-            item_name TEXT,
-            target_qty INTEGER,
-            actual_qty INTEGER,
-            status_note TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # 2) 특이사항 및 주요 이벤트 테이블
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS issue_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT,
-            event_name TEXT,
-            progress TEXT,
-            action_plan TEXT,
-            due_date TEXT,
-            status TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-init_local_db()
-
-def get_db_connection():
-    return sqlite3.connect("production_data.db")
 
 st.title("🏭 스마트 제조 & 재고 통합 관제 대시보드")
 st.caption("Real-time Manufacturing & Inventory Intelligence Dashboard")
@@ -125,19 +83,24 @@ def get_korean_week_label(dt: pd.Timestamp) -> str:
     if pd.isna(dt):
         return "미지정"
 
+    # 1. 해당 주차의 월요일, 수요일, 금요일 계산
     monday = dt - pd.Timedelta(days=dt.weekday())  # 월요일 (Mon=0)
     wednesday = monday + pd.Timedelta(days=2)      # 수요일
-    friday = monday + pd.Timedelta(days=4)          # 금요일
+    friday = monday + pd.Timedelta(days=4)         # 금요일
 
+    # 2. 수요일이 속한 월 및 연도 구하기
     target_year = wednesday.year
     target_month = wednesday.month
 
+    # 3. 그 달(target_month)의 첫 번째 수요일 구하기
     first_day_of_month = pd.Timestamp(year=target_year, month=target_month, day=1)
     days_to_first_wed = (2 - first_day_of_month.weekday()) % 7
     first_wednesday = first_day_of_month + pd.Timedelta(days=days_to_first_wed)
 
+    # 4. 몇 번째 수요일인지 계산 (1주차부터 시작)
     week_num = (wednesday.day - first_wednesday.day) // 7 + 1
 
+    # 5. 직관적인 레이블 생성 (예: '9월 2주차 (09/07~09/11)')
     date_range = f"{monday.strftime('%m/%d')}~{friday.strftime('%m/%d')}"
     return f"{target_month}월 {week_num}주차 ({date_range})"
 
@@ -145,10 +108,8 @@ def get_korean_week_label(dt: pd.Timestamp) -> str:
 # ==========================================
 # 3. 메인 탭 구성
 # ==========================================
-tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
-        "📌 주간 생산목표 관리",
-        "🚨 특이사항 & 주요 이벤트",
         "📈 완제품 재고 현황",
         "📋 실시간 생산일지",
         "📦 부품/재고 마스터",
@@ -159,158 +120,7 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
-# [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황
-# ------------------------------------------
-with tab_goal:
-    st.subheader("📌 주간 생산목표 별 실제 생산현황")
-    st.caption("대시보드에서 직접 이번 주 생산 목표 및 실적 수량을 등록하고 관리합니다.")
-
-    # DB 데이터 가져오기
-    conn = get_db_connection()
-    df_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
-    conn.close()
-
-    if not df_goals.empty:
-        weeks = df_goals["week_label"].unique().tolist()
-        selected_week = st.selectbox("📅 조회할 주차 선택", options=weeks, index=0)
-        
-        filtered_goals = df_goals[df_goals["week_label"] == selected_week]
-        
-        # 품목별 달성률 Visual Metric
-        st.markdown(f"##### 📊 {selected_week} 생산 달성률 현황")
-        m_cols = st.columns(min(len(filtered_goals), 4) if len(filtered_goals) > 0 else 1)
-        for idx, (_, row) in enumerate(filtered_goals.iterrows()):
-            with m_cols[idx % 4]:
-                target = row['target_qty']
-                actual = row['actual_qty']
-                rate = round((actual / target * 100), 1) if target > 0 else 0
-                st.metric(
-                    label=f"{row['item_name']}",
-                    value=f"{actual:,} EA",
-                    delta=f"목표 {target:,} EA ({rate}% 달성)"
-                )
-        
-        st.divider()
-        st.markdown("##### 📋 생산목표 상세 현황표")
-        st.dataframe(
-            filtered_goals[["week_label", "item_name", "target_qty", "actual_qty", "status_note"]],
-            column_config={
-                "week_label": "주차",
-                "item_name": "품목명",
-                "target_qty": "생산목표 수량 (EA)",
-                "actual_qty": "실제 생산 수량 (EA)",
-                "status_note": "비고 / 상태"
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("💡 등록된 주간 생산목표가 없습니다. 아래 입력 폼에서 새 주차 생산 목표를 입력해 주세요.")
-
-    st.divider()
-
-    # 입력 폼
-    with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
-        with st.form("new_goal_form", clear_on_submit=True):
-            g_col1, g_col2 = st.columns(2)
-            with g_col1:
-                g_week = st.text_input("주차 레이블", value="10월 1주 (10.06 ~ 10.08)")
-                g_item = st.text_input("품목명", placeholder="예: BC05, MP03, FIX5550-18")
-                g_target = st.number_input("생산목표 수량 (EA)", min_value=0, value=120)
-            with g_col2:
-                g_actual = st.number_input("실제 생산 수량 (EA)", min_value=0, value=120)
-                g_note = st.text_area("비고 / 진행상태", placeholder="예: 생산만 완료함 / 멸균출고 완료")
-            
-            submit_g = st.form_submit_button("💾 목표 저장하기", use_container_width=True)
-            if submit_g:
-                if g_week and g_item:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO production_goals (week_label, item_name, target_qty, actual_qty, status_note)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (g_week, g_item, g_target, g_actual, g_note))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"'{g_item}' 주간 목표 및 생산 실적이 저장되었습니다!")
-                    st.rerun()
-                else:
-                    st.warning("주차와 품목명을 입력해 주세요.")
-
-
-# ------------------------------------------
-# [신규 추가 탭 2] 특이사항 및 주요 이벤트
-# ------------------------------------------
-with tab_issue:
-    st.subheader("🚨 특이사항 및 주요 이벤트 관제")
-    st.caption("부품, GMP, 설비 등 업무 특이사항과 진행상황, 조치 계획을 등록·관리합니다.")
-
-    conn = get_db_connection()
-    df_issues = pd.read_sql_query("SELECT * FROM issue_events ORDER BY id DESC", conn)
-    conn.close()
-
-    if not df_issues.empty:
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            sel_cat = st.multiselect("구분 필터", options=df_issues["category"].unique(), default=df_issues["category"].unique())
-        with col_f2:
-            sel_status = st.multiselect("상태 필터", options=df_issues["status"].unique(), default=df_issues["status"].unique())
-
-        filtered_issues = df_issues[
-            (df_issues["category"].isin(sel_cat)) & 
-            (df_issues["status"].isin(sel_status))
-        ]
-
-        st.dataframe(
-            filtered_issues[["id", "category", "event_name", "progress", "action_plan", "due_date", "status"]],
-            column_config={
-                "id": "No",
-                "category": "구분",
-                "event_name": "이벤트",
-                "progress": "진행상황",
-                "action_plan": "향후 조치 계획",
-                "due_date": "완료기한(Due Date)",
-                "status": "상태"
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("💡 등록된 특이사항 데이터가 없습니다. 아래 입력 폼에서 등록해 주세요.")
-
-    st.divider()
-
-    with st.expander("➕ 새 특이사항 및 주요 이벤트 등록", expanded=df_issues.empty):
-        with st.form("new_issue_form", clear_on_submit=True):
-            i_col1, i_col2 = st.columns(2)
-            with i_col1:
-                i_category = st.selectbox("구분", ["부품", "GMP", "설비", "품질", "기타"])
-                i_event = st.text_input("이벤트 제목", placeholder="예: 포장지 공급업체 변경건 / DHR 서류 작성")
-                i_progress = st.text_area("진행상황", placeholder="예: 업체 견적문의 완료")
-            with i_col2:
-                i_plan = st.text_area("향후 조치 계획", placeholder="예: 샘플 수령 후 자체 염료테스트 수행")
-                i_due = st.text_input("완료기한 (Due Date)", value="-")
-                i_status = st.selectbox("상태", ["🔄 [진행중]", "✅ [완료]", "⏳ [보류/대기]", "🔍 [검토중]"])
-            
-            submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
-            if submit_i:
-                if i_event:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO issue_events (category, event_name, progress, action_plan, due_date, status)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (i_category, i_event, i_progress, i_plan, i_due, i_status))
-                    conn.commit()
-                    conn.close()
-                    st.success("새 특이사항이 저장되었습니다!")
-                    st.rerun()
-                else:
-                    st.warning("이벤트 제목을 입력해 주세요.")
-
-
-# ------------------------------------------
-# [Tab 1] 완제품 재고 현황 (기존 코드)
+# [Tab 1] 완제품 재고 현황
 # ------------------------------------------
 with tab1:
     st.subheader("📈 차주 생산목표 및 완제품 재고 현황")
@@ -326,7 +136,7 @@ with tab1:
 
 
 # ------------------------------------------
-# [Tab 2] 실시간 생산일지 분석 관제 (기존 코드)
+# [Tab 2] 실시간 생산일지 분석 관제
 # ------------------------------------------
 with tab2:
     st.subheader("📋 실시간 생산 및 불량 관제 분석")
@@ -361,12 +171,14 @@ with tab2:
                         df_prod[qty_col_p].astype(str).str.replace(',', ''), errors="coerce"
                     ).fillna(0)
 
+                # 공정 중복 입력 제거 후 실제 생산 수량 계산
                 if lot_col_p and qty_col_p:
                     df_unique_lot = df_prod.groupby(lot_col_p)[qty_col_p].max().reset_index()
                     total_qty = df_unique_lot[qty_col_p].sum()
                 else:
                     total_qty = df_prod[qty_col_p].sum() if qty_col_p else 0
 
+                # 불량 수량 집계
                 total_defect = 0
                 defect_qty_col = None
                 defect_date_col = None
@@ -391,6 +203,7 @@ with tab2:
                 total_output = total_qty + total_defect
                 overall_defect_rate = (total_defect / total_output * 100) if total_output > 0 else 0
 
+                # 상단 KPI 요약 카드
                 m1, m2, m3, m4 = st.columns(4)
                 with m1:
                     st.metric("총 생산 기록 건수", f"{len(df_prod):,} 건")
@@ -408,6 +221,7 @@ with tab2:
 
                 st.divider()
 
+                # 시각화 차트 세션
                 c1, c2 = st.columns([1, 1])
 
                 with c1:
@@ -533,7 +347,7 @@ with tab2:
 
 
 # ------------------------------------------
-# [Tab 3] 부품 및 재고 마스터시트 (기존 코드)
+# [Tab 3] 부품 및 재고 마스터시트
 # ------------------------------------------
 with tab3:
     st.subheader("📦 부품 및 재고 마스터 관리")
@@ -561,7 +375,7 @@ with tab3:
 
 
 # ------------------------------------------
-# [Tab 4] 실시간 부품 수불 및 재고 흐름 관제 (기존 코드)
+# [Tab 4] 실시간 부품 수불 및 재고 흐름 관제 (Flow)
 # ------------------------------------------
 with tab4:
     st.subheader("🔄 실시간 부품 수불 및 재고 흐름 관제")
@@ -715,19 +529,20 @@ with tab4:
 
 
 # ------------------------------------------
-# [Tab 5] 주간 / 월간 생산 & 품질 통합 리포트 (기존 코드)
+# [Tab 5] 주간 / 월간 생산 & 품질 통합 리포트
 # ------------------------------------------
 with tab5:
     st.subheader("📅 주간 / 월간 생산 실적 및 품질 분석 리포트")
     st.caption("생산일지 및 품질 불량 데이터를 주기별(주간/월간)로 자동 추적 및 정밀 분석합니다.")
 
-    with st.spinner("생산 및 품질 데이터를 기반으로 통합 리포트를 집계 중입니다..."):
+    with st.spinner("생산 및 품질 시상 데이터를 기반으로 통합 리포트를 집계 중입니다..."):
         try:
             df_p = load_sheet_data("생산일지")
             df_d = load_sheet_data("불량관리")
             if df_d.empty:
                 df_d = load_sheet_data("Form_Responses2")
 
+            # 1. 컬럼 매핑 파악
             date_col_p, qty_col_p, lot_col_p = None, None, None
             if not df_p.empty:
                 for c in df_p.columns:
@@ -757,12 +572,14 @@ with tab5:
             if df_p.empty or not date_col_p or not qty_col_p:
                 st.warning("⚠️ 분석할 생산일지 데이터가 존재하지 않거나 일자/수량 항목이 올바르지 않습니다.")
             else:
+                # 데이터 전처리 & 한글 날짜 파싱 적용
                 df_p[qty_col_p] = pd.to_numeric(
                     df_p[qty_col_p].astype(str).str.replace(',', ''), errors="coerce"
                 ).fillna(0)
                 df_p["작업일시"] = clean_date_series(df_p[date_col_p])
                 df_p = df_p.dropna(subset=["작업일시"]).copy()
 
+                # 품목 코드 추출
                 def extract_item(l_str):
                     l_str = str(l_str).strip()
                     if not l_str or l_str.lower() in ["nan", "none"]:
@@ -773,6 +590,7 @@ with tab5:
 
                 df_p["품목코드"] = df_p[lot_col_p].apply(extract_item) if lot_col_p else "기본품목"
 
+                # 불량 데이터 전처리
                 if not df_d.empty and date_col_d and qty_col_d:
                     df_d[qty_col_d] = pd.to_numeric(
                         df_d[qty_col_d].astype(str).str.replace(',', ''), errors="coerce"
@@ -782,10 +600,12 @@ with tab5:
                 else:
                     df_d = pd.DataFrame(columns=["작업일시", qty_col_d if qty_col_d else "불량수량"])
 
+                # --- 리포트 조건 선택 UI ---
                 r_col1, r_col2 = st.columns([1, 2])
                 with r_col1:
                     period_type = st.radio("📊 분석 주기 선택", ["주간 단위 (Weekly)", "월간 단위 (Monthly)"], horizontal=True)
 
+                # 수요일 기준 월별 주차 레이블 변환 적용
                 if "주간" in period_type:
                     df_p["기간그룹"] = df_p["작업일시"].apply(get_korean_week_label)
                     if not df_d.empty and "작업일시" in df_d.columns:
@@ -795,6 +615,7 @@ with tab5:
                     if not df_d.empty and "작업일시" in df_d.columns:
                         df_d["기간그룹"] = df_d["작업일시"].dt.strftime("%Y년 %m월")
 
+                # 공정 중복 제거 기준 생산 집계
                 if lot_col_p:
                     df_p_unique = df_p.groupby(["기간그룹", lot_col_p, "품목코드"])[qty_col_p].max().reset_index()
                 else:
@@ -809,6 +630,7 @@ with tab5:
                 else:
                     defect_summary = pd.DataFrame(columns=["기간그룹", "불량수량"])
 
+                # 데이터 통합
                 report_df = pd.merge(prod_summary, defect_summary, on="기간그룹", how="left").fillna(0)
                 report_df["총출하량"] = report_df["생산수량"] + report_df["불량수량"]
                 report_df["불량률(%)"] = np.where(
@@ -818,6 +640,7 @@ with tab5:
                 )
                 report_df = report_df.sort_values(by="기간그룹")
 
+                # --- 상단 핵심 KPI 요약 ---
                 st.divider()
                 tot_p = report_df["생산수량"].sum()
                 tot_d = report_df["불량수량"].sum()
@@ -835,6 +658,7 @@ with tab5:
 
                 st.divider()
 
+                # --- 1. 생산량 & 불량률 추이 차트 (이중 축) ---
                 st.markdown("##### 📈 기간별 생산 실적 및 불량률 추이")
                 
                 fig_trend = make_subplots(specs=[[{"secondary_y": True}]])
@@ -875,6 +699,7 @@ with tab5:
 
                 st.plotly_chart(fig_trend, use_container_width=True)
 
+                # --- 2. 기간별 품목 생산 비중 분석 ---
                 st.markdown("##### 📦 기간별 품목(제품) 생산 구성 비중")
                 item_group = df_p_unique.groupby(["기간그룹", "품목코드"])[qty_col_p].sum().reset_index()
 
@@ -890,10 +715,12 @@ with tab5:
                 fig_item.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20))
                 st.plotly_chart(fig_item, use_container_width=True)
 
+                # --- 3. 데이터 요약 상세 테이블 ---
                 st.markdown("##### 📋 주기별 생산 및 품질 종합 분석표")
                 disp_report = report_df.copy()
                 disp_report.columns = ["분석 기간", "양품 생산수량 (EA)", "불량 발생수량 (EA)", "총 출하수량 (EA)", "공정 불량률 (%)"]
                 
+                # 수량 포맷팅
                 disp_report["양품 생산수량 (EA)"] = disp_report["양품 생산수량 (EA)"].map("{:,.0f}".format)
                 disp_report["불량 발생수량 (EA)"] = disp_report["불량 발생수량 (EA)"].map("{:,.0f}".format)
                 disp_report["총 출하수량 (EA)"] = disp_report["총 출하수량 (EA)"].map("{:,.0f}".format)
@@ -906,7 +733,7 @@ with tab5:
 
 
 # ------------------------------------------
-# [Tab 6] 월별 재고현황 (기존 코드)
+# [Tab 6] 월별 재고현황 (완제품 및 부품 재고)
 # ------------------------------------------
 with tab6:
     st.subheader("📅 월별 재고현황")
@@ -914,10 +741,12 @@ with tab6:
 
     with st.spinner("구글 시트의 [완제품재고 관리] 및 [마스터시트] 데이터를 연동 중입니다..."):
         try:
+            # 1. 완제품 입고/출고 데이터 로드 (완제품 재고 전용 구글 시트에서 가져옴)
             df_fg_in = load_sheet_data("IN", doc_id=FINISHED_GOODS_DOC_ID)
             df_fg_out = load_sheet_data("OUT", doc_id=FINISHED_GOODS_DOC_ID)
             df_parts = load_sheet_data("마스터시트", doc_id=DOCUMENT_ID)
 
+            # 날짜 파싱
             if not df_fg_in.empty and "타임스탬프" in df_fg_in.columns:
                 df_fg_in["작업일시"] = clean_date_series(df_fg_in["타임스탬프"])
             elif not df_fg_in.empty and len(df_fg_in.columns) > 0:
@@ -936,12 +765,92 @@ with tab6:
             if not available_months:
                 available_months = ["2026-09", "2026-08", "2026-07", "2026-06"]
 
-            selected_month = st.selectbox("📅 기준월 선택", available_months)
+            selected_month = st.selectbox("📅 기준월 선택 (예: 2026-09)", available_months, key="tab6_month_select")
+
+            st.divider()
+
+            # 2. 완제품 재고현황 계산 & 출력
+            st.markdown(f"#### 📈 1. 완제품 재고현황 ({selected_month} 기준)")
             
-            st.info(f"선택하신 {selected_month} 기준 재고 현황 데이터입니다.")
-            
-            st.markdown("##### 📦 부품 및 마스터 재고 리스트")
-            st.dataframe(df_parts, use_container_width=True, hide_index=True)
+            if not df_fg_in.empty:
+                # 입고 수량 집계
+                in_item_col = [c for c in df_fg_in.columns if "제품" in c or "품목" in c]
+                in_qty_col = [c for c in df_fg_in.columns if "입고수량" in c or "수량" in c]
+                
+                c_item = in_item_col[0] if in_item_col else df_fg_in.columns[1]
+                c_qty = in_qty_col[0] if in_qty_col else df_fg_in.columns[3]
+
+                df_fg_in[c_qty] = pd.to_numeric(df_fg_in[c_qty].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
+                
+                # 안전한 월별 누적 필터링 (선택 연월보다 작거나 같은 데이터)
+                if "YM" in df_fg_in.columns:
+                    df_in_filtered = df_fg_in[df_fg_in["YM"] <= selected_month]
+                else:
+                    df_in_filtered = df_fg_in
+
+                fg_in_summary = df_in_filtered.groupby(c_item)[c_qty].sum().reset_index()
+                fg_in_summary.columns = ["완제품명", "총 입고수량"]
+
+                # 출고 수량 집계
+                fg_out_summary = pd.DataFrame(columns=["완제품명", "총 출하수량"])
+                if not df_fg_out.empty:
+                    out_item_col = [c for c in df_fg_out.columns if "제품" in c or "품목" in c]
+                    out_qty_col = [c for c in df_fg_out.columns if "출고수량" in c or "수량" in c]
+                    co_item = out_item_col[0] if out_item_col else df_fg_out.columns[1]
+                    co_qty = out_qty_col[0] if out_qty_col else df_fg_out.columns[3]
+
+                    df_fg_out[co_qty] = pd.to_numeric(df_fg_out[co_qty].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
+                    
+                    if "작업일시" in df_fg_out.columns and not df_fg_out["작업일시"].dropna().empty:
+                        df_fg_out["YM"] = df_fg_out["작업일시"].dt.strftime("%Y-%m")
+                        df_out_filtered = df_fg_out[df_fg_out["YM"] <= selected_month]
+                    else:
+                        df_out_filtered = df_fg_out
+
+                    fg_out_summary = df_out_filtered.groupby(co_item)[co_qty].sum().reset_index()
+                    fg_out_summary.columns = ["완제품명", "총 출하수량"]
+
+                # 완제품 최종 재고 계산
+                fg_merged = pd.merge(fg_in_summary, fg_out_summary, on="완제품명", how="outer").fillna(0)
+                fg_merged["현재 완제품 재고량"] = fg_merged["총 입고수량"] - fg_merged["총 출하수량"]
+                fg_merged = fg_merged.sort_values(by="현재 완제품 재고량", ascending=False)
+
+                # 포맷 적용
+                fg_display = fg_merged.copy()
+                fg_display["총 입고수량"] = fg_display["총 입고수량"].map("{:,.0f}".format)
+                fg_display["총 출하수량"] = fg_display["총 출하수량"].map("{:,.0f}".format)
+                fg_display["현재 완제품 재고량"] = fg_display["현재 완제품 재고량"].map("{:,.0f}".format)
+
+                st.dataframe(fg_display, use_container_width=True, hide_index=True)
+
+                csv_fg = fg_merged.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    label=f"📥 {selected_month} 완제품 재고현황 CSV 다운로드",
+                    data=csv_fg,
+                    file_name=f"완제품_재고현황_{selected_month}.csv",
+                    mime="text/csv",
+                    key="dl_fg_csv"
+                )
+            else:
+                st.info("완제품 입출고 데이터를 확인하는 중입니다.")
+
+            st.divider()
+
+            # 3. 부품 재고현황 출력
+            st.markdown(f"#### 📦 2. 부품/자재 재고현황 ({selected_month} 기준)")
+            if not df_parts.empty:
+                st.dataframe(df_parts, use_container_width=True, hide_index=True)
+
+                csv_parts = df_parts.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    label=f"📥 {selected_month} 부품 재고현황 CSV 다운로드",
+                    data=csv_parts,
+                    file_name=f"부품_재고현황_{selected_month}.csv",
+                    mime="text/csv",
+                    key="dl_parts_csv"
+                )
+            else:
+                st.info("부품 마스터 재고 데이터를 불러오는 중입니다.")
 
         except Exception as e:
-            st.error(f"월별 재고현황 데이터 로드 중 오류가 발생했습니다: {e}")            
+            st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")             
