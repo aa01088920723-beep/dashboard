@@ -967,109 +967,24 @@ with tab6:
     st.subheader("📅 월별 재고현황")
     st.caption("경영지원부 보고용 완제품 재고현황 및 부품/자재 재고현황을 기준월별로 조회 및 내보냅니다.")
 
-    with st.spinner("구글 시트의 [완제품재고 관리] 및 [마스터시트] 데이터를 연동 중입니다..."):
+    with st.spinner("구글 시트의 [재고현황] 및 [마스터시트] 데이터를 연동 중입니다..."):
         try:
-            df_fg_in = load_sheet_data("IN", doc_id=FINISHED_GOODS_DOC_ID)
-            df_fg_out = load_sheet_data("OUT", doc_id=FINISHED_GOODS_DOC_ID)
+            # 완제품 재고현황 탭 데이터 불러오기
+            df_fg_status = load_sheet_data("재고현황", doc_id=FINISHED_GOODS_DOC_ID)
             df_parts = load_sheet_data("마스터시트", doc_id=DOCUMENT_ID)
 
-            if not df_fg_in.empty and "타임스탬프" in df_fg_in.columns:
-                df_fg_in["작업일시"] = clean_date_series(df_fg_in["타임스탬프"])
-            elif not df_fg_in.empty and len(df_fg_in.columns) > 0:
-                df_fg_in["작업일시"] = clean_date_series(df_fg_in.iloc[:, 0])
-
-            if not df_fg_out.empty and "타임스탬프" in df_fg_out.columns:
-                df_fg_out["작업일시"] = clean_date_series(df_fg_out["타임스탬프"])
-            elif not df_fg_out.empty and len(df_fg_out.columns) > 0:
-                df_fg_out["작업일시"] = clean_date_series(df_fg_out.iloc[:, 0])
-
-            available_months = []
-            if "작업일시" in df_fg_in.columns and not df_fg_in["작업일시"].dropna().empty:
-                df_fg_in["YM"] = df_fg_in["작업일시"].dt.strftime("%Y-%m")
-                available_months = sorted(df_fg_in["YM"].dropna().unique(), reverse=True)
-
-            if not available_months:
-                available_months = ["2026-09", "2026-08", "2026-07", "2026-06"]
-
-            selected_month = st.selectbox("📅 기준월 선택 (예: 2026-09)", available_months, key="tab6_month_select")
+            available_months = ["2026-11", "2026-10", "2026-09", "2026-08"]
+            selected_month = st.selectbox("📅 기준월 선택 (예: 2026-11)", available_months, key="tab6_month_select")
 
             st.divider()
 
             st.markdown(f"#### 📈 1. 완제품 재고현황 ({selected_month} 기준)")
             
-            if not df_fg_in.empty:
-                in_item_col = [c for c in df_fg_in.columns if "제품" in c or "품목" in c]
-                in_qty_col = [c for c in df_fg_in.columns if "입고수량" in c or "수량" in c]
-                
-                c_item = in_item_col[0] if in_item_col else df_fg_in.columns[1]
-                c_qty = in_qty_col[0] if in_qty_col else df_fg_in.columns[3]
+            if not df_fg_status.empty:
+                # 데이터프레임 그대로 화면에 출력 (시트에 있는 초기재고, 입고합계, 출고합계, 현재고 활용)
+                st.dataframe(df_fg_status, use_container_width=True, hide_index=True)
 
-                df_fg_in[c_qty] = pd.to_numeric(df_fg_in[c_qty].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
-                
-                if "YM" in df_fg_in.columns:
-                    df_in_filtered = df_fg_in[df_fg_in["YM"] <= selected_month]
-                else:
-                    df_in_filtered = df_fg_in
-
-                fg_in_summary = df_in_filtered.groupby(c_item)[c_qty].sum().reset_index()
-                fg_in_summary.columns = ["완제품명", "총 입고수량"]
-
-                fg_out_summary = pd.DataFrame(columns=["완제품명", "총 출하수량"])
-                if not df_fg_out.empty:
-                    out_item_col = [c for c in df_fg_out.columns if "제품" in c or "품목" in c]
-                    out_qty_col = [c for c in df_fg_out.columns if "출고수량" in c or "수량" in c]
-                    co_item = out_item_col[0] if out_item_col else df_fg_out.columns[1]
-                    co_qty = out_qty_col[0] if out_qty_col else df_fg_out.columns[3]
-
-                    df_fg_out[co_qty] = pd.to_numeric(df_fg_out[co_qty].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
-                    
-                    if "작업일시" in df_fg_out.columns and not df_fg_out["작업일시"].dropna().empty:
-                        df_fg_out["YM"] = df_fg_out["작업일시"].dt.strftime("%Y-%m")
-                        df_out_filtered = df_fg_out[df_fg_out["YM"] <= selected_month]
-                    else:
-                        df_out_filtered = df_fg_out
-
-                    fg_out_summary = df_out_filtered.groupby(co_item)[co_qty].sum().reset_index()
-                    fg_out_summary.columns = ["완제품명", "총 출하수량"]
-
-                fg_merged = pd.merge(fg_in_summary, fg_out_summary, on="완제품명", how="outer").fillna(0)
-                
-                # [기초재고 계산 및 마이너스 방지 로직]
-                if not df_fg_in.empty and "YM" in df_fg_in.columns:
-                    df_prior_in = df_fg_in[df_fg_in["YM"] < selected_month]
-                    prior_in_sum = df_prior_in.groupby(c_item)[c_qty].sum().reset_index() if not df_prior_in.empty else pd.DataFrame(columns=[c_item, c_qty])
-                    prior_in_sum.columns = ["완제품명", "이전_입고수량"]
-                    
-                    df_prior_out = df_fg_out[df_fg_out["YM"] < selected_month] if not df_fg_out.empty and "YM" in df_fg_out.columns else pd.DataFrame()
-                    prior_out_sum = df_prior_out.groupby(co_item)[co_qty].sum().reset_index() if not df_prior_out.empty else pd.DataFrame(columns=["완제품명", "이전_출하수량"])
-                    if not prior_out_sum.empty and len(prior_out_sum.columns) >= 2:
-                        prior_out_sum.columns = ["완제품명", "이전_출하수량"]
-                    
-                    fg_prior = pd.merge(prior_in_sum, prior_out_sum, on="완제품명", how="outer").fillna(0)
-                    if "이전_입고수량" in fg_prior.columns and "이전_출하수량" in fg_prior.columns:
-                        fg_prior["기초재고"] = fg_prior["이전_입고수량"] - fg_prior["이전_출하수량"]
-                        # 과거 데이터 오류나 입고 누락으로 인한 음수 기초재고는 0으로 보정
-                        fg_prior["기초재고"] = fg_prior["기초재고"].apply(lambda x: max(0, x))
-                    else:
-                        fg_prior["기초재고"] = 0
-                        
-                    fg_merged = pd.merge(fg_merged, fg_prior[["완제품명", "기초재고"]], on="완제품명", how="left").fillna(0)
-                else:
-                    fg_merged["기초재고"] = 0
-
-                fg_merged["현재 완제품 재고량"] = fg_merged["기초재고"] + fg_merged["총 입고수량"] - fg_merged["총 출하수량"]
-                fg_merged = fg_merged.sort_values(by="현재 완제품 재고량", ascending=False)
-
-                fg_display = fg_merged.copy()
-                fg_display["기초재고"] = fg_display["기초재고"].map("{:,.0f}".format)
-                fg_display["총 입고수량"] = fg_display["총 입고수량"].map("{:,.0f}".format)
-                fg_display["총 출하수량"] = fg_display["총 출하수량"].map("{:,.0f}".format)
-                fg_display["현재 완제품 재고량"] = fg_display["현재 완제품 재고량"].map("{:,.0f}".format)
-
-                display_cols = ["완제품명", "기초재고", "총 입고수량", "총 출하수량", "현재 완제품 재고량"]
-                st.dataframe(fg_display[display_cols], use_container_width=True, hide_index=True)
-
-                csv_fg = fg_merged[display_cols].to_csv(index=False).encode("utf-8-sig")
+                csv_fg = df_fg_status.to_csv(index=False).encode("utf-8-sig")
                 st.download_button(
                     label=f"📥 {selected_month} 완제품 재고현황 CSV 다운로드",
                     data=csv_fg,
@@ -1078,7 +993,7 @@ with tab6:
                     key="dl_fg_csv"
                 )
             else:
-                st.info("완제품 입출고 데이터를 확인하는 중입니다.")
+                st.info("완제품 재고현황 데이터를 불러오는 중입니다.")
 
             st.divider()
 
