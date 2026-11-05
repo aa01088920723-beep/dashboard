@@ -250,7 +250,7 @@ with tab_goal:
                 g_actual = st.number_input("실제 생산 수량 (EA)", min_value=0, step=10)
                 g_note = st.text_input("비고 / 상태 (예: 생산완료 멸균미진행)", value="")
             
-          submit_g = st.form_submit_button("💾 주간 생산목표 저장하기", use_container_width=True)
+            submit_g = st.form_submit_button("💾 주간 생산목표 저장하기", use_container_width=True)
             if submit_g:
                 if g_week and g_item:
                     # 1) 로컬 SQLite 저장
@@ -368,7 +368,7 @@ with tab_issue:
                 i_due = st.text_input("완료기한 (Due Date)", value="-")
                 i_status = st.selectbox("상태", ["🔄 [진행중]", "✅ [완료]", "⏳ [보류/대기]", "🔍 [검토중]"])
             
-         submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
+            submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
             if submit_i:
                 if i_event:
                     # 1) 로컬 SQLite 저장
