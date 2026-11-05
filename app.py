@@ -1034,11 +1034,11 @@ with tab6:
 
                 fg_merged = pd.merge(fg_in_summary, fg_out_summary, on="완제품명", how="outer").fillna(0)
                 
-                # [기초재고 계산 로직 추가] 선택된 기준월 이전의 누적 입고/출하 차분을 기초재고로 반영
+                # [기초재고 계산 및 마이너스 방지 로직]
                 if not df_fg_in.empty and "YM" in df_fg_in.columns:
                     df_prior_in = df_fg_in[df_fg_in["YM"] < selected_month]
                     prior_in_sum = df_prior_in.groupby(c_item)[c_qty].sum().reset_index() if not df_prior_in.empty else pd.DataFrame(columns=[c_item, c_qty])
-                    prior_in_sum.columns = ["완제품명", "이전_입고수량"] if not prior_in_sum.empty else ["완제품명", "이전_입고수량"]
+                    prior_in_sum.columns = ["완제품명", "이전_입고수량"]
                     
                     df_prior_out = df_fg_out[df_fg_out["YM"] < selected_month] if not df_fg_out.empty and "YM" in df_fg_out.columns else pd.DataFrame()
                     prior_out_sum = df_prior_out.groupby(co_item)[co_qty].sum().reset_index() if not df_prior_out.empty else pd.DataFrame(columns=["완제품명", "이전_출하수량"])
@@ -1048,6 +1048,8 @@ with tab6:
                     fg_prior = pd.merge(prior_in_sum, prior_out_sum, on="완제품명", how="outer").fillna(0)
                     if "이전_입고수량" in fg_prior.columns and "이전_출하수량" in fg_prior.columns:
                         fg_prior["기초재고"] = fg_prior["이전_입고수량"] - fg_prior["이전_출하수량"]
+                        # 과거 데이터 오류나 입고 누락으로 인한 음수 기초재고는 0으로 보정
+                        fg_prior["기초재고"] = fg_prior["기초재고"].apply(lambda x: max(0, x))
                     else:
                         fg_prior["기초재고"] = 0
                         
