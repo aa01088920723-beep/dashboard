@@ -981,7 +981,18 @@ with tab6:
             st.markdown(f"#### 📈 1. 완제품 재고현황 ({selected_month} 기준)")
             
             if not df_fg_status.empty:
-                # 데이터프레임 그대로 화면에 출력 (시트에 있는 초기재고, 입고합계, 출고합계, 현재고 활용)
+                # [데이터 정리] Unnamed 컬럼 및 불필요한 열 제거 후 표준 컬럼명 재정의
+                df_fg_status = df_fg_status.loc[:, ~df_fg_status.columns.str.contains('^Unnamed')]
+                
+                if len(df_fg_status.columns) >= 6:
+                    df_fg_status.columns = ["완제품명", "LOT번호", "초기재고", "입고합계", "출고합계", "현재고"] + list(df_fg_status.columns[6:])
+                    df_fg_status = df_fg_status[["완제품명", "LOT번호", "초기재고", "입고합계", "출고합계", "현재고"]]
+                
+                # 빈 행 제거
+                df_fg_status = df_fg_status.dropna(subset=["완제품명"])
+                df_fg_status = df_fg_status[df_fg_status["완제품명"].astype(str).str.strip() != ""]
+
+                # 화면 출력
                 st.dataframe(df_fg_status, use_container_width=True, hide_index=True)
 
                 csv_fg = df_fg_status.to_csv(index=False).encode("utf-8-sig")
@@ -989,7 +1000,7 @@ with tab6:
                     label=f"📥 {selected_month} 완제품 재고현황 CSV 다운로드",
                     data=csv_fg,
                     file_name=f"완제품_재고현황_{selected_month}.csv",
-                    mime="text/csv",
+                    mime="text/css",
                     key="dl_fg_csv"
                 )
             else:
