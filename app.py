@@ -988,21 +988,43 @@ with tab6:
                     df_fg_status.columns = ["완제품명", "LOT번호", "초기재고", "입고합계", "출고합계", "현재고"] + list(df_fg_status.columns[6:])
                     df_fg_status = df_fg_status[["완제품명", "LOT번호", "초기재고", "입고합계", "출고합계", "현재고"]]
                 
-                # 빈 행 제거
+                # 빈 행 제거 및 숫자형 변환
                 df_fg_status = df_fg_status.dropna(subset=["완제품명"])
                 df_fg_status = df_fg_status[df_fg_status["완제품명"].astype(str).str.strip() != ""]
+                
+                for col in ["초기재고", "입고합계", "출고합계", "현재고"]:
+                    if col in df_fg_status.columns:
+                        df_fg_status[col] = pd.to_numeric(df_fg_status[col].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
 
-                # 화면 출력
-                st.dataframe(df_fg_status, use_container_width=True, hide_index=True)
+                # ⭐ [핵심] 경영지원부용 품목별 총합 요약 데이터 생성 (GROUPBY)
+                df_fg_summary = df_fg_status.groupby("완제품명")[["초기재고", "입고합계", "출고합계", "현재고"]].sum().reset_index()
+                df_fg_summary = df_fg_summary.sort_values(by="현재고", ascending=False)
 
-                csv_fg = df_fg_status.to_csv(index=False).encode("utf-8-sig")
+                # 1. 경영지원부 보고용 품목별 총괄표 출력
+                st.markdown("##### 📌 품목별 총괄 재고현황 (경영지원부 보고용)")
+                st.dataframe(df_fg_summary, use_container_width=True, hide_index=True)
+
+                # 품목별 요약 CSV 다운로드 버튼
+                csv_summary = df_fg_summary.to_csv(index=False).encode("utf-8-sig")
                 st.download_button(
-                    label=f"📥 {selected_month} 완제품 재고현황 CSV 다운로드",
-                    data=csv_fg,
-                    file_name=f"완제품_재고현황_{selected_month}.csv",
-                    mime="text/css",
-                    key="dl_fg_csv"
+                    label=f"📥 {selected_month} 품목별 총괄 재고현황 CSV 다운로드",
+                    data=csv_summary,
+                    file_name=f"품목별_총괄재고현황_{selected_month}.csv",
+                    mime="text/csv",
+                    key="dl_fg_summary_csv"
                 )
+
+                # 2. LOT별 상세 내역은 필요할 때 열어볼 수 있도록 Expander로 배치
+                with st.expander("🔍 LOT별 상세 재고현황 보기 (실무 관리용)"):
+                    st.dataframe(df_fg_status, use_container_width=True, hide_index=True)
+                    csv_fg_detail = df_fg_status.to_csv(index=False).encode("utf-8-sig")
+                    st.download_button(
+                        label=f"📥 {selected_month} LOT별 상세 재고현황 CSV 다운로드",
+                        data=csv_fg_detail,
+                        file_name=f"LOT별_상세재고현황_{selected_month}.csv",
+                        mime="text/csv",
+                        key="dl_fg_detail_csv"
+                    )
             else:
                 st.info("완제품 재고현황 데이터를 불러오는 중입니다.")
 
@@ -1024,4 +1046,5 @@ with tab6:
                 st.info("부품 마스터 재고 데이터를 불러오는 중입니다.")
 
         except Exception as e:
+            st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")
             st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")
