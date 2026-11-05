@@ -88,6 +88,8 @@ st.caption("Real-time Manufacturing & Inventory Intelligence Dashboard")
 DOCUMENT_ID = "1cJEuRJ8Sbgb-PF0-xta0j7J2MqoYlATWXRk907DZPnc"
 # 완제품 재고 전용 문서 ID
 FINISHED_GOODS_DOC_ID = "1wUFDAk6iutu2433iLxqF5PEVinxZsjXBQ5twqPmwtg0"
+# 구글 앱스크립트 웹 앱 URL
+APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz3DYBPEzz6NqpdJZRFVE47GZflq6QE4QaBdzD92CvGT7ag14kQP1EqiVXw0Blg9oln/exec"
 
 
 # ==========================================
@@ -248,9 +250,10 @@ with tab_goal:
                 g_actual = st.number_input("실제 생산 수량 (EA)", min_value=0, step=10)
                 g_note = st.text_input("비고 / 상태 (예: 생산완료 멸균미진행)", value="")
             
-            submit_g = st.form_submit_button("💾 주간 생산목표 저장하기", use_container_width=True)
+          submit_g = st.form_submit_button("💾 주간 생산목표 저장하기", use_container_width=True)
             if submit_g:
                 if g_week and g_item:
+                    # 1) 로컬 SQLite 저장
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute(
@@ -259,7 +262,23 @@ with tab_goal:
                     )
                     conn.commit()
                     conn.close()
-                    st.success("새 주간 생산목표가 성공적으로 저장되었습니다!")
+
+                    # 2) 구글 시트(앱스크립트 doPost)로 전송 연동
+                    try:
+                        import requests
+                        payload = {
+                            "action": "add_goal",
+                            "week_label": g_week,
+                            "item_name": g_item,
+                            "target_qty": g_target,
+                            "actual_qty": g_actual,
+                            "status_note": g_note
+                        }
+                        requests.post(APPS_SCRIPT_URL, json=payload, timeout=5)
+                    except Exception as err:
+                        st.warning(f"로컬 저장 완료, 구글 시트 연동 중 경고: {err}")
+
+                    st.success("새 주간 생산목표가 대시보드와 구글 시트에 성공적으로 저장되었습니다!")
                     st.rerun()
                 else:
                     st.warning("주차 및 품목명을 입력해 주세요.")
@@ -349,9 +368,10 @@ with tab_issue:
                 i_due = st.text_input("완료기한 (Due Date)", value="-")
                 i_status = st.selectbox("상태", ["🔄 [진행중]", "✅ [완료]", "⏳ [보류/대기]", "🔍 [검토중]"])
             
-            submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
+         submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
             if submit_i:
                 if i_event:
+                    # 1) 로컬 SQLite 저장
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute(
@@ -360,7 +380,24 @@ with tab_issue:
                     )
                     conn.commit()
                     conn.close()
-                    st.success("새 특이사항이 저장되었습니다!")
+
+                    # 2) 구글 시트(앱스크립트 doPost)로 전송 연동
+                    try:
+                        import requests
+                        payload = {
+                            "action": "add_issue",
+                            "category": i_category,
+                            "event_name": i_event,
+                            "progress": i_progress,
+                            "action_plan": i_plan,
+                            "due_date": i_due,
+                            "status": i_status
+                        }
+                        requests.post(APPS_SCRIPT_URL, json=payload, timeout=5)
+                    except Exception as err:
+                        st.warning(f"로컬 저장 완료, 구글 시트 연동 중 경고: {err}")
+
+                    st.success("새 특이사항이 성공적으로 저장되었습니다!")
                     st.rerun()
                 else:
                     st.warning("이벤트 제목을 입력해 주세요.")
