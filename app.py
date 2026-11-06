@@ -161,13 +161,12 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
-# [Tab 0] 주간 생산목표 별 실제 생산현황 (구글 시트 연동 보완)
+# [Tab 0] 주간 생산목표 별 실제 생산현황
 # ------------------------------------------
 with tab_goal:
     st.subheader("📌 주간 생산목표 별 실제 생산현황")
     st.caption("대시보드에서 직접 이번 주 생산 목표 및 실적 수량을 등록하고 관리합니다.")
 
-    # 구글 시트("주간생산목표" 탭) 데이터 우선 로드
     df_goals = load_sheet_data("주간생산목표")
     if df_goals.empty:
         conn = get_db_connection()
@@ -880,3 +879,156 @@ with tab5:
                 avg_rate = (tot_d / (tot_p + tot_d) * 100) if (tot_p + tot_d) > 0 else 0
 
                 kpi_a, kpi_b, kpi_c, kpi_d = st.columns(4)
+                with kpi_a:
+                    st.metric("총 분석 기간 수", f"{len(report_df):,} 개 주기")
+                with kpi_b:
+                    st.metric("기간 총 생산량", f"{int(tot_p):,} EA")
+                with kpi_c:
+                    st.metric("기간 총 불량량", f"{int(tot_d):,} EA", delta=f"-{int(tot_d):,}" if tot_d > 0 else "0", delta_color="inverse")
+                with kpi_d:
+                    st.metric("평균 불량률", f"{avg_rate:.2f} %")
+
+                st.divider()
+                st.markdown("##### 📈 기간별 생산 실적 및 불량률 추이")
+                
+                fig_trend = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_trend.add_trace(
+                    go.Bar(
+                        x=report_df["기간그룹"],
+                        y=report_df["생산수량"],
+                        name="생산수량 (EA)",
+                        marker_color="#1f77b4",
+                        text=report_df["생산수량"].apply(lambda x: f"{int(x):,}"),
+                        textposition="inside"
+                    ),
+                    secondary_y=False,
+                )
+                fig_trend.add_trace(
+                    go.Scatter(
+                        x=report_df["기간그룹"],
+                        y=report_df["불량률(%)"],
+                        name="불량률 (%)",
+                        mode="lines+markers+text",
+                        line=dict(color="#d62728", width=3),
+                        text=report_df["불량률(%)"].apply(lambda x: f"{x:.1f}%"),
+                        textposition="top center"
+                    ),
+                    secondary_y=True,
+                )
+
+                fig_trend.update_xaxes(title_text="분석 주기")
+                fig_trend.update_yaxes(title_text="생산 수량 (EA)", secondary_y=False)
+                fig_trend.update_yaxes(title_text="불량률 (%)", secondary_y=True)
+                fig_trend.update_layout(
+                    height=400,
+                    margin=dict(l=20, r=20, t=30, b=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                st.plotly_chart(fig_trend, use_container_width=True)
+
+                st.markdown("##### 📦 기간별 품목(제품) 생산 구성 비중")
+                item_group = df_p_unique.groupby(["기간그룹", "품목코드"])[qty_col_p].sum().reset_index()
+
+                fig_item = px.bar(
+                    item_group,
+                    x="기간그룹",
+                    y=qty_col_p,
+                    color="품목코드",
+                    title="주기별 주요 생산 품목 구성",
+                    labels={qty_col_p: "생산수량 (EA)", "기간그룹": "분석 주기"},
+                    color_discrete_sequence=px.colors.qualitative.Set2
+                )
+                fig_item.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_item, use_container_width=True)
+
+                st.markdown("##### 📋 주기별 생산 및 품질 종합 분석표")
+                disp_report = report_df.copy()
+                disp_report.columns = ["분석 기간", "양품 생산수량 (EA)", "불량 발생수량 (EA)", "총 출하수량 (EA)", "공정 불량률 (%)"]
+                
+                disp_report["양품 생산수량 (EA)"] = disp_report["양품 생산수량 (EA)"].map("{:,.0f}".format)
+                disp_report["불량 발생수량 (EA)"] = disp_report["불량 발생수량 (EA)"].map("{:,.0f}".format)
+                disp_report["총 출하수량 (EA)"] = disp_report["총 출하수량 (EA)"].map("{:,.0f}".format)
+                disp_report["공정 불량률 (%)"] = disp_report["공정 불량률 (%)"].map("{:.2f}%".format)
+
+                st.dataframe(disp_report, use_container_width=True, hide_index=True)
+
+        except Exception as e:
+            st.error(f"주간/월간 분석 리포트 생성 중 오류가 발생했습니다: {e}")
+
+# ------------------------------------------
+# [Tab 6] 월별 재고현황 (완제품 및 부품 재고)
+# ------------------------------------------
+with tab6:
+    st.subheader("📅 월별 재고현황")
+    st.caption("경영지원부 보고용 완제품 재고현황 및 부품/자재 재고현황을 기준월별로 조회 및 내보냅니다.")
+
+    with st.spinner("구글 시트의 [재고현황] 및 [마스터시트] 데이터를 연동 중입니다..."):
+        try:
+            df_fg_status = load_sheet_data("재고현황", doc_id=FINISHED_GOODS_DOC_ID)
+            df_parts = load_sheet_data("마스터시트", doc_id=DOCUMENT_ID)
+
+            available_months = ["2026-11", "2026-10", "2026-09", "2026-08"]
+            selected_month = st.selectbox("📅 기준월 선택 (예: 2026-11)", available_months, key="tab6_month_select")
+
+            st.divider()
+            st.markdown(f"#### 📈 1. 완제품 재고현황 ({selected_month} 기준)")
+            
+            if not df_fg_status.empty:
+                df_fg_status = df_fg_status.loc[:, ~df_fg_status.columns.str.contains('^Unnamed')]
+                
+                if len(df_fg_status.columns) >= 6:
+                    df_fg_status.columns = ["완제품명", "LOT번호", "초기재고", "입고합계", "출고합계", "현재고"] + list(df_fg_status.columns[6:])
+                    df_fg_status = df_fg_status[["완제품명", "LOT번호", "초기재고", "입고합계", "출고합계", "현재고"]]
+                
+                df_fg_status = df_fg_status.dropna(subset=["완제품명"])
+                df_fg_status = df_fg_status[df_fg_status["완제품명"].astype(str).str.strip() != ""]
+                
+                for col in ["초기재고", "입고합계", "출고합계", "현재고"]:
+                    if col in df_fg_status.columns:
+                        df_fg_status[col] = pd.to_numeric(df_fg_status[col].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
+
+                df_fg_summary = df_fg_status.groupby("완제품명")[["초기재고", "입고합계", "출고합계", "현재고"]].sum().reset_index()
+                df_fg_summary = df_fg_summary.sort_values(by="현재고", ascending=False)
+
+                st.markdown("##### 📌 품목별 총괄 재고현황 (경영지원부 보고용)")
+                st.dataframe(df_fg_summary, use_container_width=True, hide_index=True)
+
+                csv_summary = df_fg_summary.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    label=f"📥 {selected_month} 품목별 총괄 재고현황 CSV 다운로드",
+                    data=csv_summary,
+                    file_name=f"품목별_총괄재고현황_{selected_month}.csv",
+                    mime="text/csv",
+                    key="dl_fg_summary_csv"
+                )
+
+                with st.expander("🔍 LOT별 상세 재고현황 보기 (실무 관리용)"):
+                    st.dataframe(df_fg_status, use_container_width=True, hide_index=True)
+                    csv_fg_detail = df_fg_status.to_csv(index=False).encode("utf-8-sig")
+                    st.download_button(
+                        label=f"📥 {selected_month} LOT별 상세 재고현황 CSV 다운로드",
+                        data=csv_fg_detail,
+                        file_name=f"LOT별_상세재고현황_{selected_month}.csv",
+                        mime="text/csv",
+                        key="dl_fg_detail_csv"
+                    )
+            else:
+                st.info("완제품 재고현황 데이터를 불러오는 중입니다.")
+
+            st.divider()
+            st.markdown(f"#### 📦 2. 부품/자재 재고현황 ({selected_month} 기준)")
+            if not df_parts.empty:
+                st.dataframe(df_parts, use_container_width=True, hide_index=True)
+                csv_parts = df_parts.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    label=f"📥 {selected_month} 부품 재고현황 CSV 다운로드",
+                    data=csv_parts,
+                    file_name=f"부품_재고현황_{selected_month}.csv",
+                    mime="text/csv",
+                    key="dl_parts_csv"
+                )
+            else:
+                st.info("부품 마스터 재고 데이터를 불러오는 중입니다.")
+
+        except Exception as e:
+            st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")
