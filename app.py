@@ -129,7 +129,7 @@ def get_korean_week_label(dt: pd.Timestamp) -> str:
 
     monday = dt - pd.Timedelta(days=dt.weekday())  # 월요일 (Mon=0)
     wednesday = monday + pd.Timedelta(days=2)      # 수요일
-    friday = monday + pd.Timedelta(days=4)          # 금요일
+    friday = monday + pd.Timedelta(days=4)         # 금요일
 
     target_year = wednesday.year
     target_month = wednesday.month
@@ -161,57 +161,74 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
-# [Tab 0] 주간 생산목표 별 실제 생산현황
+# [Tab 0] 주간 생산목표 별 실제 생산현황 (수정본: 구글시트 + 로컬DB 통합)
 # ------------------------------------------
 with tab_goal:
     st.subheader("📌 주간 생산목표 별 실제 생산현황")
     st.caption("대시보드에서 직접 이번 주 생산 목표 및 실적 수량을 등록하고 관리합니다.")
 
-    df_goals = load_sheet_data("주간생산목표")
-    if df_goals.empty:
-        conn = get_db_connection()
-        df_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
-        conn.close()
+    df_sheet_goals = load_sheet_data("주간생산목표")
+    
+    conn = get_db_connection()
+    df_db_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
+    conn.close()
+
+    combined_list = []
+    if not df_sheet_goals.empty:
+        combined_list.append(df_sheet_goals)
+    if not df_db_goals.empty:
+        combined_list.append(df_db_goals)
+        
+    if combined_list:
+        df_goals = pd.concat(combined_list, ignore_index=True)
+        if "week_label" in df_goals.columns and "item_name" in df_goals.columns:
+            df_goals = df_goals.drop_duplicates(subset=["week_label", "item_name"], keep="first")
     else:
+        df_goals = pd.DataFrame()
+
+    if not df_goals.empty:
         if "target_qty" in df_goals.columns:
             df_goals["target_qty"] = pd.to_numeric(df_goals["target_qty"], errors="coerce").fillna(0)
         if "actual_qty" in df_goals.columns:
             df_goals["actual_qty"] = pd.to_numeric(df_goals["actual_qty"], errors="coerce").fillna(0)
 
     if not df_goals.empty and "week_label" in df_goals.columns:
-        weeks = df_goals["week_label"].unique().tolist()
-        selected_week = st.selectbox("📅 조회할 주차 선택", options=weeks, index=0)
+        weeks = [w for w in df_goals["week_label"].dropna().unique().tolist() if str(w).strip() != ""]
         
-        filtered_goals = df_goals[df_goals["week_label"] == selected_week]
-        
-        st.markdown(f"##### 📊 {selected_week} 생산 달성률 현황")
-        m_cols = st.columns(min(len(filtered_goals), 4) if len(filtered_goals) > 0 else 1)
-        for idx, (_, row) in enumerate(filtered_goals.iterrows()):
-            with m_cols[idx % 4]:
-                target = int(row.get('target_qty', 0))
-                actual = int(row.get('actual_qty', 0))
-                rate = round((actual / target * 100), 1) if target > 0 else 0
-                st.metric(
-                    label=f"{row.get('item_name', '')}",
-                    value=f"{actual:,} EA",
-                    delta=f"목표 {target:,} EA ({rate}% 달성)"
-                )
-        
-        st.divider()
-        st.markdown("##### 📋 생산목표 상세 현황표")
-        display_cols = [c for c in ["week_label", "item_name", "target_qty", "actual_qty", "status_note"] if c in filtered_goals.columns]
-        st.dataframe(
-            filtered_goals[display_cols],
-            column_config={
-                "week_label": "주차",
-                "item_name": "품목명",
-                "target_qty": "생산목표 수량 (EA)",
-                "actual_qty": "실제 생산 수량 (EA)",
-                "status_note": "비고 / 상태"
-            },
-            use_container_width=True,
-            hide_index=True
-        )
+        if weeks:
+            selected_week = st.selectbox("📅 조회할 주차 선택", options=weeks, index=0)
+            filtered_goals = df_goals[df_goals["week_label"] == selected_week]
+            
+            st.markdown(f"##### 📊 {selected_week} 생산 달성률 현황")
+            m_cols = st.columns(min(len(filtered_goals), 4) if len(filtered_goals) > 0 else 1)
+            for idx, (_, row) in enumerate(filtered_goals.iterrows()):
+                with m_cols[idx % 4]:
+                    target = int(row.get('target_qty', 0))
+                    actual = int(row.get('actual_qty', 0))
+                    rate = round((actual / target * 100), 1) if target > 0 else 0
+                    st.metric(
+                        label=f"{row.get('item_name', '')}",
+                        value=f"{actual:,} EA",
+                        delta=f"목표 {target:,} EA ({rate}% 달성)"
+                    )
+            
+            st.divider()
+            st.markdown("##### 📋 생산목표 상세 현황표")
+            display_cols = [c for c in ["week_label", "item_name", "target_qty", "actual_qty", "status_note"] if c in filtered_goals.columns]
+            st.dataframe(
+                filtered_goals[display_cols],
+                column_config={
+                    "week_label": "주차",
+                    "item_name": "품목명",
+                    "target_qty": "생산목표 수량 (EA)",
+                    "actual_qty": "실제 생산 수량 (EA)",
+                    "status_note": "비고 / 상태"
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("💡 등록된 주간 생산목표가 없습니다. 아래 입력 폼에서 새 주차 생산 목표를 입력해 주세요.")
     else:
         st.info("💡 등록된 주간 생산목표가 없습니다. 아래 입력 폼에서 새 주차 생산 목표를 입력해 주세요.")
 
@@ -610,7 +627,7 @@ with tab2:
             st.error(f"생산 및 불량 데이터를 분석하는 중 오류가 발생했습니다: {e}")
 
 # ------------------------------------------
-# [Tab 4] 실시간 부품 수불 및 재고 흐름 관제 (Flow)
+# [Tab 4] 부품/재고 마스터 관제
 # ------------------------------------------
 with tab3:
     st.subheader("📦 부품/재고 마스터 관제")
@@ -621,6 +638,9 @@ with tab3:
     else:
         st.info("마스터시트 데이터를 불러오는 중입니다.")
 
+# ------------------------------------------
+# [Tab 5] 실시간 부품 수불 및 재고 흐름 관제 (Flow)
+# ------------------------------------------
 with tab4:
     st.subheader("🔄 실시간 부품 수불 및 재고 흐름 관제")
     st.caption("마스터시트의 실제 초기재고, 불량 누적, 현재고 데이터를 기반으로 실시간 관제합니다.")
@@ -770,7 +790,7 @@ with tab4:
             st.error(f"수불 관제 파이프라인을 생성하는 중 오류가 발생했습니다: {e}")
 
 # ------------------------------------------
-# [Tab 5] 주간 / 월간 생산 & 품질 통합 리포트
+# [Tab 6] 주간 / 월간 생산 & 품질 통합 리포트
 # ------------------------------------------
 with tab5:
     st.subheader("📅 주간 / 월간 생산 실적 및 품질 분석 리포트")
@@ -956,7 +976,7 @@ with tab5:
             st.error(f"주간/월간 분석 리포트 생성 중 오류가 발생했습니다: {e}")
 
 # ------------------------------------------
-# [Tab 6] 월별 재고현황 (완제품 및 부품 재고)
+# [Tab 7] 월별 재고현황 (완제품 및 부품 재고)
 # ------------------------------------------
 with tab6:
     st.subheader("📅 월별 재고현황")
