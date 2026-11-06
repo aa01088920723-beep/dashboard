@@ -161,22 +161,19 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
-# [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황 (구글 시트 연동 보완)
+# [Tab 0] 주간 생산목표 별 실제 생산현황 (구글 시트 연동 보완)
 # ------------------------------------------
 with tab_goal:
     st.subheader("📌 주간 생산목표 별 실제 생산현황")
     st.caption("대시보드에서 직접 이번 주 생산 목표 및 실적 수량을 등록하고 관리합니다.")
 
-    # 1) 로컬 DB 및 구글 시트 데이터 로드 (우선순위: 구글 시트 -> 없으면 로컬 DB)
+    # 구글 시트("주간생산목표" 탭) 데이터 우선 로드
     df_goals = load_sheet_data("주간생산목표")
-    
-    # 구글 시트에 데이터가 없거나 로드 실패 시 로컬 DB fallback
     if df_goals.empty:
         conn = get_db_connection()
         df_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
         conn.close()
     else:
-        # 구글 시트 컬럼 숫자형 변환 정제
         if "target_qty" in df_goals.columns:
             df_goals["target_qty"] = pd.to_numeric(df_goals["target_qty"], errors="coerce").fillna(0)
         if "actual_qty" in df_goals.columns:
@@ -203,7 +200,6 @@ with tab_goal:
         
         st.divider()
         st.markdown("##### 📋 생산목표 상세 현황표")
-        
         display_cols = [c for c in ["week_label", "item_name", "target_qty", "actual_qty", "status_note"] if c in filtered_goals.columns]
         st.dataframe(
             filtered_goals[display_cols],
@@ -222,16 +218,12 @@ with tab_goal:
 
     st.divider()
 
-    # ==========================================
-    # ❌ 1. 주간 생산목표 데이터 삭제 기능
-    # ==========================================
     with st.expander("❌ 주간 생산목표 데이터 삭제"):
         if not df_goals.empty:
             goal_options = {
                 f"[{row.get('id', idx)}] {row.get('week_label', '')} | {row.get('item_name', '')} | 실적: {row.get('actual_qty', 0)}EA | 비고: {row.get('status_note', '')}": row.get('id', idx)
                 for idx, row in df_goals.iterrows()
             }
-            
             selected_goal_label = st.selectbox("삭제할 생산목표 항목 선택", list(goal_options.keys()), key="del_goal_selectbox")
             target_goal_id = goal_options[selected_goal_label]
             
@@ -241,17 +233,13 @@ with tab_goal:
                 cursor.execute("DELETE FROM production_goals WHERE id = ?", (target_goal_id,))
                 conn.commit()
                 conn.close()
-                
-                st.success("해당 생산목표가 DB에서 삭제되었습니다!")
+                st.success("해당 생산목표가 DB에서 성공적으로 삭제되었습니다!")
                 st.rerun()
         else:
             st.write("삭제할 생산목표 데이터가 없습니다.")
 
     st.divider()
 
-    # ==========================================
-    # ➕ 2. 새 주간 생산목표 및 실적 입력 폼
-    # ==========================================
     with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
         with st.form("new_goal_form", clear_on_submit=True):
             g_col1, g_col2 = st.columns(2)
@@ -266,7 +254,6 @@ with tab_goal:
             submit_g = st.form_submit_button("💾 주간 생산목표 저장하기", use_container_width=True)
             if submit_g:
                 if g_week and g_item:
-                    # 1) 로컬 SQLite 저장
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute(
@@ -276,7 +263,6 @@ with tab_goal:
                     conn.commit()
                     conn.close()
 
-                    # 2) 구글 시트(앱스크립트 doPost)로 전송 연동
                     try:
                         import requests
                         payload = {
@@ -291,15 +277,14 @@ with tab_goal:
                     except Exception as err:
                         st.warning(f"로컬 저장 완료, 구글 시트 연동 중 경고: {err}")
 
-                    st.cache_data.clear() # 저장 후 캐시 클리어
+                    st.cache_data.clear()
                     st.success("새 주간 생산목표가 대시보드와 구글 시트에 성공적으로 저장되었습니다!")
                     st.rerun()
                 else:
                     st.warning("주차 및 품목명을 입력해 주세요.")
 
-
 # ------------------------------------------
-# [신규 추가 탭 2] 특이사항 및 주요 이벤트
+# [Tab 1] 특이사항 및 주요 이벤트
 # ------------------------------------------
 with tab_issue:
     st.subheader("🚨 특이사항 및 주요 이벤트 관제")
@@ -340,16 +325,12 @@ with tab_issue:
 
     st.divider()
 
-    # ==========================================
-    # ❌ 1. 특이사항 데이터 삭제 기능
-    # ==========================================
     with st.expander("❌ 등록된 특이사항 데이터 삭제"):
         if not df_issues.empty:
             issue_options = {
                 f"[{row['id']}] [{row.get('category', '')}] {row.get('event_name', '')} ({row.get('status', '')})": row['id']
                 for _, row in df_issues.iterrows()
             }
-            
             selected_issue_label = st.selectbox("삭제할 특이사항 항목 선택", list(issue_options.keys()), key="del_issue_selectbox")
             target_issue_id = issue_options[selected_issue_label]
             
@@ -359,7 +340,6 @@ with tab_issue:
                 cursor.execute("DELETE FROM issue_events WHERE id = ?", (target_issue_id,))
                 conn.commit()
                 conn.close()
-                
                 st.success("해당 특이사항이 DB에서 성공적으로 삭제되었습니다!")
                 st.rerun()
         else:
@@ -367,9 +347,6 @@ with tab_issue:
 
     st.divider()
 
-    # ==========================================
-    # ➕ 2. 새 특이사항 및 주요 이벤트 등록 폼
-    # ==========================================
     with st.expander("➕ 새 특이사항 및 주요 이벤트 등록", expanded=df_issues.empty):
         with st.form("new_issue_form", clear_on_submit=True):
             i_col1, i_col2 = st.columns(2)
@@ -385,7 +362,6 @@ with tab_issue:
             submit_i = st.form_submit_button("💾 특이사항 저장하기", use_container_width=True)
             if submit_i:
                 if i_event:
-                    # 1) 로컬 SQLite 저장
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute(
@@ -395,7 +371,6 @@ with tab_issue:
                     conn.commit()
                     conn.close()
 
-                    # 2) 구글 시트(앱스크립트 doPost)로 전송 연동
                     try:
                         import requests
                         payload = {
@@ -411,12 +386,14 @@ with tab_issue:
                     except Exception as err:
                         st.warning(f"로컬 저장 완료, 구글 시트 연동 중 경고: {err}")
 
+                    st.cache_data.clear()
                     st.success("새 특이사항이 성공적으로 저장되었습니다!")
                     st.rerun()
                 else:
                     st.warning("이벤트 제목을 입력해 주세요.")
+
 # ------------------------------------------
-# [Tab 1] 완제품 재고 현황
+# [Tab 2] 완제품 재고 현황
 # ------------------------------------------
 with tab1:
     st.subheader("📈 차주 생산목표 및 완제품 재고 현황")
@@ -430,9 +407,8 @@ with tab1:
 
     st.components.v1.iframe("https://m.site.naver.com/2a4rF", height=680, scrolling=True)
 
-
 # ------------------------------------------
-# [Tab 2] 실시간 생산일지 분석 관제
+# [Tab 3] 실시간 생산일지 분석 관제
 # ------------------------------------------
 with tab2:
     st.subheader("📋 실시간 생산 및 불량 관제 분석")
@@ -564,7 +540,6 @@ with tab2:
                             margin=dict(l=150, r=20, t=10, b=40),
                             coloraxis_showscale=False
                         )
-                        
                         st.plotly_chart(fig_bar, use_container_width=True)
                     else:
                         st.info("생산일지 분석 데이터를 확인 중입니다.")
@@ -592,7 +567,6 @@ with tab2:
 
                 if not df_defect.empty:
                     st.markdown("##### 📄 자재별 불량 발생 내역 (날짜 및 사유 상세)")
-                    
                     display_cols = []
                     col_rename_dict = {}
 
@@ -630,45 +604,24 @@ with tab2:
                     st.dataframe(df_defect_display, use_container_width=True, height=220, hide_index=True)
 
                 st.divider()
-
                 st.markdown("##### 📄 원본 생산일지 상세 데이터")
                 st.dataframe(df_prod, use_container_width=True, height=350, hide_index=True)
 
         except Exception as e:
             st.error(f"생산 및 불량 데이터를 분석하는 중 오류가 발생했습니다: {e}")
 
-
-# ------------------------------------------
-# [Tab 3] 부품 및 재고 마스터시트
-# ------------------------------------------
-with tab3:
-    st.subheader("📦 부품 및 재고 마스터 관리")
-    with st.spinner("마스터 데이터를 불러오는 중입니다..."):
-        try:
-            df_master = load_sheet_data("마스터시트")
-
-            kpi1, kpi2, kpi3 = st.columns(3)
-            with kpi1:
-                st.metric("총 등록 부품/재고 품목", f"{len(df_master):,} 개")
-
-            num_cols_m = find_numeric_cols(df_master)
-            if num_cols_m:
-                with kpi2:
-                    st.metric("총 재고 보유 수량", f"{df_master[num_cols_m[0]].sum():,} EA")
-                with kpi3:
-                    st.metric("평균 보유 재고량", f"{df_master[num_cols_m[0]].mean():,.1f} EA")
-
-            st.divider()
-            st.markdown("##### 📋 마스터 재고 리스트")
-            st.dataframe(df_master, use_container_width=True, hide_index=True)
-
-        except Exception as e:
-            st.error(f"마스터시트 데이터 로드 실패: {e}")
-
-
 # ------------------------------------------
 # [Tab 4] 실시간 부품 수불 및 재고 흐름 관제 (Flow)
 # ------------------------------------------
+with tab3:
+    st.subheader("📦 부품/재고 마스터 관제")
+    st.caption("구글 시트의 [마스터시트] 원본 데이터를 조회합니다.")
+    df_master_view = load_sheet_data("마스터시트")
+    if not df_master_view.empty:
+        st.dataframe(df_master_view, use_container_width=True, hide_index=True)
+    else:
+        st.info("마스터시트 데이터를 불러오는 중입니다.")
+
 with tab4:
     st.subheader("🔄 실시간 부품 수불 및 재고 흐름 관제")
     st.caption("마스터시트의 실제 초기재고, 불량 누적, 현재고 데이터를 기반으로 실시간 관제합니다.")
@@ -709,7 +662,6 @@ with tab4:
                         item_options.append(name)
 
             dropdown_options = ["📦 [전체 부품/자재 요약 보기]"] + sorted(list(set(item_options)))
-
             selected_item_option = st.selectbox("🔍 관제할 부품/자재를 선택하세요", dropdown_options)
 
             init_stock = 0
@@ -755,7 +707,6 @@ with tab4:
                 total_inflow = current_stock + defect_qty
 
             used_qty = max(0, total_inflow - current_stock - defect_qty)
-
             total_consumed = used_qty + defect_qty
             depletion_rate = (total_consumed / total_inflow * 100) if total_inflow > 0 else 0
             yield_rate = (used_qty / total_consumed * 100) if total_consumed > 0 else 100
@@ -818,7 +769,6 @@ with tab4:
 
         except Exception as e:
             st.error(f"수불 관제 파이프라인을 생성하는 중 오류가 발생했습니다: {e}")
-
 
 # ------------------------------------------
 # [Tab 5] 주간 / 월간 생산 & 품질 통합 리포트
@@ -930,172 +880,3 @@ with tab5:
                 avg_rate = (tot_d / (tot_p + tot_d) * 100) if (tot_p + tot_d) > 0 else 0
 
                 kpi_a, kpi_b, kpi_c, kpi_d = st.columns(4)
-                with kpi_a:
-                    st.metric("총 분석 기간 수", f"{len(report_df):,} 개 주기")
-                with kpi_b:
-                    st.metric("기간 총 생산량", f"{int(tot_p):,} EA")
-                with kpi_c:
-                    st.metric("기간 총 불량량", f"{int(tot_d):,} EA", delta=f"-{int(tot_d):,}" if tot_d > 0 else "0", delta_color="inverse")
-                with kpi_d:
-                    st.metric("평균 불량률", f"{avg_rate:.2f} %")
-
-                st.divider()
-
-                st.markdown("##### 📈 기간별 생산 실적 및 불량률 추이")
-                
-                fig_trend = make_subplots(specs=[[{"secondary_y": True}]])
-                
-                fig_trend.add_trace(
-                    go.Bar(
-                        x=report_df["기간그룹"],
-                        y=report_df["생산수량"],
-                        name="생산수량 (EA)",
-                        marker_color="#1f77b4",
-                        text=report_df["생산수량"].apply(lambda x: f"{int(x):,}"),
-                        textposition="inside"
-                    ),
-                    secondary_y=False,
-                )
-
-                fig_trend.add_trace(
-                    go.Scatter(
-                        x=report_df["기간그룹"],
-                        y=report_df["불량률(%)"],
-                        name="불량률 (%)",
-                        mode="lines+markers+text",
-                        line=dict(color="#d62728", width=3),
-                        text=report_df["불량률(%)"].apply(lambda x: f"{x:.1f}%"),
-                        textposition="top center"
-                    ),
-                    secondary_y=True,
-                )
-
-                fig_trend.update_xaxes(title_text="분석 주기")
-                fig_trend.update_yaxes(title_text="생산 수량 (EA)", secondary_y=False)
-                fig_trend.update_yaxes(title_text="불량률 (%)", secondary_y=True)
-                fig_trend.update_layout(
-                    height=400,
-                    margin=dict(l=20, r=20, t=30, b=20),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-
-                st.plotly_chart(fig_trend, use_container_width=True)
-
-                st.markdown("##### 📦 기간별 품목(제품) 생산 구성 비중")
-                item_group = df_p_unique.groupby(["기간그룹", "품목코드"])[qty_col_p].sum().reset_index()
-
-                fig_item = px.bar(
-                    item_group,
-                    x="기간그룹",
-                    y=qty_col_p,
-                    color="품목코드",
-                    title="주기별 주요 생산 품목 구성",
-                    labels={qty_col_p: "생산수량 (EA)", "기간그룹": "분석 주기"},
-                    color_discrete_sequence=px.colors.qualitative.Set2
-                )
-                fig_item.update_layout(height=380, margin=dict(l=20, r=20, t=40, b=20))
-                st.plotly_chart(fig_item, use_container_width=True)
-
-                st.markdown("##### 📋 주기별 생산 및 품질 종합 분석표")
-                disp_report = report_df.copy()
-                disp_report.columns = ["분석 기간", "양품 생산수량 (EA)", "불량 발생수량 (EA)", "총 출하수량 (EA)", "공정 불량률 (%)"]
-                
-                disp_report["양품 생산수량 (EA)"] = disp_report["양품 생산수량 (EA)"].map("{:,.0f}".format)
-                disp_report["불량 발생수량 (EA)"] = disp_report["불량 발생수량 (EA)"].map("{:,.0f}".format)
-                disp_report["총 출하수량 (EA)"] = disp_report["총 출하수량 (EA)"].map("{:,.0f}".format)
-                disp_report["공정 불량률 (%)"] = disp_report["공정 불량률 (%)"].map("{:.2f}%".format)
-
-                st.dataframe(disp_report, use_container_width=True, hide_index=True)
-
-        except Exception as e:
-            st.error(f"주간/월간 분석 리포트 생성 중 오류가 발생했습니다: {e}")
-
-
-# ------------------------------------------
-# [Tab 6] 월별 재고현황 (완제품 및 부품 재고)
-# ------------------------------------------
-with tab6:
-    st.subheader("📅 월별 재고현황")
-    st.caption("경영지원부 보고용 완제품 재고현황 및 부품/자재 재고현황을 기준월별로 조회 및 내보냅니다.")
-
-    with st.spinner("구글 시트의 [재고현황] 및 [마스터시트] 데이터를 연동 중입니다..."):
-        try:
-            # 완제품 재고현황 탭 데이터 불러오기
-            df_fg_status = load_sheet_data("재고현황", doc_id=FINISHED_GOODS_DOC_ID)
-            df_parts = load_sheet_data("마스터시트", doc_id=DOCUMENT_ID)
-
-            available_months = ["2026-11", "2026-10", "2026-09", "2026-08"]
-            selected_month = st.selectbox("📅 기준월 선택 (예: 2026-11)", available_months, key="tab6_month_select")
-
-            st.divider()
-
-            st.markdown(f"#### 📈 1. 완제품 재고현황 ({selected_month} 기준)")
-            
-            if not df_fg_status.empty:
-                # [데이터 정리] Unnamed 컬럼 및 불필요한 열 제거 후 표준 컬럼명 재정의
-                df_fg_status = df_fg_status.loc[:, ~df_fg_status.columns.str.contains('^Unnamed')]
-                
-                if len(df_fg_status.columns) >= 6:
-                    df_fg_status.columns = ["완제품명", "LOT번호", "초기재고", "입고합계", "출고합계", "현재고"] + list(df_fg_status.columns[6:])
-                    df_fg_status = df_fg_status[["완제품명", "LOT번호", "초기재고", "입고합계", "출고합계", "현재고"]]
-                
-                # 빈 행 제거 및 숫자형 변환
-                df_fg_status = df_fg_status.dropna(subset=["완제품명"])
-                df_fg_status = df_fg_status[df_fg_status["완제품명"].astype(str).str.strip() != ""]
-                
-                for col in ["초기재고", "입고합계", "출고합계", "현재고"]:
-                    if col in df_fg_status.columns:
-                        df_fg_status[col] = pd.to_numeric(df_fg_status[col].astype(str).str.replace(',', ''), errors="coerce").fillna(0)
-
-                # ⭐ [핵심] 경영지원부용 품목별 총합 요약 데이터 생성 (GROUPBY)
-                df_fg_summary = df_fg_status.groupby("완제품명")[["초기재고", "입고합계", "출고합계", "현재고"]].sum().reset_index()
-                df_fg_summary = df_fg_summary.sort_values(by="현재고", ascending=False)
-
-                # 1. 경영지원부 보고용 품목별 총괄표 출력
-                st.markdown("##### 📌 품목별 총괄 재고현황 (경영지원부 보고용)")
-                st.dataframe(df_fg_summary, use_container_width=True, hide_index=True)
-
-                # 품목별 요약 CSV 다운로드 버튼
-                csv_summary = df_fg_summary.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    label=f"📥 {selected_month} 품목별 총괄 재고현황 CSV 다운로드",
-                    data=csv_summary,
-                    file_name=f"품목별_총괄재고현황_{selected_month}.csv",
-                    mime="text/csv",
-                    key="dl_fg_summary_csv"
-                )
-
-                # 2. LOT별 상세 내역은 필요할 때 열어볼 수 있도록 Expander로 배치
-                with st.expander("🔍 LOT별 상세 재고현황 보기 (실무 관리용)"):
-                    st.dataframe(df_fg_status, use_container_width=True, hide_index=True)
-                    csv_fg_detail = df_fg_status.to_csv(index=False).encode("utf-8-sig")
-                    st.download_button(
-                        label=f"📥 {selected_month} LOT별 상세 재고현황 CSV 다운로드",
-                        data=csv_fg_detail,
-                        file_name=f"LOT별_상세재고현황_{selected_month}.csv",
-                        mime="text/csv",
-                        key="dl_fg_detail_csv"
-                    )
-            else:
-                st.info("완제품 재고현황 데이터를 불러오는 중입니다.")
-
-            st.divider()
-
-            st.markdown(f"#### 📦 2. 부품/자재 재고현황 ({selected_month} 기준)")
-            if not df_parts.empty:
-                st.dataframe(df_parts, use_container_width=True, hide_index=True)
-
-                csv_parts = df_parts.to_csv(index=False).encode("utf-8-sig")
-                st.download_button(
-                    label=f"📥 {selected_month} 부품 재고현황 CSV 다운로드",
-                    data=csv_parts,
-                    file_name=f"부품_재고현황_{selected_month}.csv",
-                    mime="text/csv",
-                    key="dl_parts_csv"
-                )
-            else:
-                st.info("부품 마스터 재고 데이터를 불러오는 중입니다.")
-
-        except Exception as e:
-            st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")
-            st.error(f"월별 재고현황 집계 도중 오류가 발생했습니다: {e}")
