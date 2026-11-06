@@ -161,17 +161,28 @@ tab_goal, tab_issue, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 # ------------------------------------------
-# [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황
+# [신규 추가 탭 1] 주간 생산목표 별 실제 생산현황 (구글 시트 연동 보완)
 # ------------------------------------------
 with tab_goal:
     st.subheader("📌 주간 생산목표 별 실제 생산현황")
     st.caption("대시보드에서 직접 이번 주 생산 목표 및 실적 수량을 등록하고 관리합니다.")
 
-    conn = get_db_connection()
-    df_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
-    conn.close()
+    # 1) 로컬 DB 및 구글 시트 데이터 로드 (우선순위: 구글 시트 -> 없으면 로컬 DB)
+    df_goals = load_sheet_data("주간생산목표")
+    
+    # 구글 시트에 데이터가 없거나 로드 실패 시 로컬 DB fallback
+    if df_goals.empty:
+        conn = get_db_connection()
+        df_goals = pd.read_sql_query("SELECT * FROM production_goals ORDER BY id DESC", conn)
+        conn.close()
+    else:
+        # 구글 시트 컬럼 숫자형 변환 정제
+        if "target_qty" in df_goals.columns:
+            df_goals["target_qty"] = pd.to_numeric(df_goals["target_qty"], errors="coerce").fillna(0)
+        if "actual_qty" in df_goals.columns:
+            df_goals["actual_qty"] = pd.to_numeric(df_goals["actual_qty"], errors="coerce").fillna(0)
 
-    if not df_goals.empty:
+    if not df_goals.empty and "week_label" in df_goals.columns:
         weeks = df_goals["week_label"].unique().tolist()
         selected_week = st.selectbox("📅 조회할 주차 선택", options=weeks, index=0)
         
@@ -181,19 +192,21 @@ with tab_goal:
         m_cols = st.columns(min(len(filtered_goals), 4) if len(filtered_goals) > 0 else 1)
         for idx, (_, row) in enumerate(filtered_goals.iterrows()):
             with m_cols[idx % 4]:
-                target = row['target_qty']
-                actual = row['actual_qty']
+                target = int(row.get('target_qty', 0))
+                actual = int(row.get('actual_qty', 0))
                 rate = round((actual / target * 100), 1) if target > 0 else 0
                 st.metric(
-                    label=f"{row['item_name']}",
+                    label=f"{row.get('item_name', '')}",
                     value=f"{actual:,} EA",
                     delta=f"목표 {target:,} EA ({rate}% 달성)"
                 )
         
         st.divider()
         st.markdown("##### 📋 생산목표 상세 현황표")
+        
+        display_cols = [c for c in ["week_label", "item_name", "target_qty", "actual_qty", "status_note"] if c in filtered_goals.columns]
         st.dataframe(
-            filtered_goals[["week_label", "item_name", "target_qty", "actual_qty", "status_note"]],
+            filtered_goals[display_cols],
             column_config={
                 "week_label": "주차",
                 "item_name": "품목명",
@@ -215,8 +228,8 @@ with tab_goal:
     with st.expander("❌ 주간 생산목표 데이터 삭제"):
         if not df_goals.empty:
             goal_options = {
-                f"[{row['id']}] {row.get('week_label', '')} | {row.get('item_name', '')} | 실적: {row.get('actual_qty', 0)}EA | 비고: {row.get('status_note', '')}": row['id']
-                for _, row in df_goals.iterrows()
+                f"[{row.get('id', idx)}] {row.get('week_label', '')} | {row.get('item_name', '')} | 실적: {row.get('actual_qty', 0)}EA | 비고: {row.get('status_note', '')}": row.get('id', idx)
+                for idx, row in df_goals.iterrows()
             }
             
             selected_goal_label = st.selectbox("삭제할 생산목표 항목 선택", list(goal_options.keys()), key="del_goal_selectbox")
@@ -229,7 +242,7 @@ with tab_goal:
                 conn.commit()
                 conn.close()
                 
-                st.success("해당 생산목표가 DB에서 성공적으로 삭제되었습니다!")
+                st.success("해당 생산목표가 DB에서 삭제되었습니다!")
                 st.rerun()
         else:
             st.write("삭제할 생산목표 데이터가 없습니다.")
@@ -237,7 +250,7 @@ with tab_goal:
     st.divider()
 
     # ==========================================
-    # ➕ 2. 새 주간 생산목표 및 실적 입력 폼 (생산일정 입력칸)
+    # ➕ 2. 새 주간 생산목표 및 실적 입력 폼
     # ==========================================
     with st.expander("➕ 새 주간 생산목표 및 실적 입력", expanded=df_goals.empty):
         with st.form("new_goal_form", clear_on_submit=True):
@@ -278,6 +291,7 @@ with tab_goal:
                     except Exception as err:
                         st.warning(f"로컬 저장 완료, 구글 시트 연동 중 경고: {err}")
 
+                    st.cache_data.clear() # 저장 후 캐시 클리어
                     st.success("새 주간 생산목표가 대시보드와 구글 시트에 성공적으로 저장되었습니다!")
                     st.rerun()
                 else:
